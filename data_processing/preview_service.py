@@ -109,17 +109,31 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
             indices = np.linspace(0, original_length - 1, target_size, dtype=int)
             df = df.iloc[indices].copy()
 
-    # Filter out 'index' column if it exists
-    plot_columns = [col for col in df.columns if col.lower() != 'index']
+    # Check for Time column to use as X-axis
+    time_col = None
+    if 'Time(s)' in df.columns:
+        time_col = 'Time(s)'
+    
+    # Filter out 'index' column and time column if it exists
+    plot_columns = [col for col in df.columns if col.lower() != 'index' and col != time_col]
     if not plot_columns:
         raise ValueError('No data columns to plot (only index column found)')
 
+    # Determine X-axis values
+    if time_col and time_col in df.columns:
+        x_values = df[time_col]
+        x_title = 'Time (s)'
+    else:
+        x_values = None
+        x_title = 'Index'
+
     # Handle single or multiple columns
     if len(plot_columns) == 1:
-        # Single column - plot against row index
+        # Single column - plot against time or index
         col = plot_columns[0]
         fig = go.Figure()
         fig.add_trace(go.Scatter(
+            x=x_values,
             y=df[col],
             mode='lines+markers',
             name=col,
@@ -127,23 +141,24 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
         ))
         fig.update_layout(
             title=f'{title} (sampled {downsample_percent}%)',
-            xaxis_title='Index',
+            xaxis_title=x_title,
             yaxis_title=col,
             hovermode='x unified',
             height=600,
         )
     else:
-        # Multiple columns - plot all against first column or index
+        # Multiple columns - plot all against time or index
         fig = go.Figure()
         for col in plot_columns:
             fig.add_trace(go.Scatter(
+                x=x_values,
                 y=df[col],
                 mode='lines+markers',
                 name=col,
             ))
         fig.update_layout(
             title=f'{title} (sampled {downsample_percent}%)',
-            xaxis_title='Index',
+            xaxis_title=x_title,
             yaxis_title='Value',
             hovermode='x unified',
             height=600,
