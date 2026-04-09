@@ -59,15 +59,15 @@ This project requires Python and the following packages in the virtual environme
 1. Create and activate a Python virtual environment:
    ```powershell
    python -m venv .venv
-   .\.venv\Scripts\Activate.ps1
+   .\.venv\Scripts\activate
    ```
 2. Install required packages:
    ```powershell
-   .\.venv\Scripts\pip.exe install flask pandas plotly nptdms odfpy
+   pip install flask pandas plotly nptdms odfpy
    ```
 3. Run the app:
    ```powershell
-   .\.venv\Scripts\python.exe app.py
+   python app.py
    ```
 4. Visit `http://127.0.0.1:5000` in Chrome.
 
