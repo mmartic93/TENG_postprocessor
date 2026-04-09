@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Data Visualization</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 20px; }
+      .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+      .header h1 { margin: 0; }
+      .info { background-color: #f0f0f0; padding: 10px; border-radius: 4px; margin-bottom: 20px; }
+      .navigation { margin-top: 20px; }
+      .navigation a { margin-right: 15px; }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>Data Visualization</h1>
+      <p><strong>{{ filename }}</strong></p>
+    </div>
+
+    <div class="info">
+      <p>Data shape: {{ df_info }}</p>
+      <p>Downsampling: {{ downsample_percent }}%</p>
+      {% if gain_display %}
+        <p>Gain applied: {{ gain_display }}</p>
+      {% endif %}
+      {% if req_display %}
+        <p>Req used: {{ req_display }}</p>
+      {% endif %}
+      {% if plot_mode %}
+        <p>Plot mode: <strong>{{ plot_mode }}</strong></p>
+      {% endif %}
+      {% if mean_power is not none %}
+        <p>Mean power: <strong>{{ '%.4g' | format(mean_power) }} W</strong></p>
+      {% endif %}
+      <form method="get" action="{{ url_for('view_file') }}" style="display: inline; margin-top: 10px;">
+        <input type="hidden" name="rel" value="{{ filename }}" />
+        <input type="hidden" name="gain" value="{{ gain_display }}" />
+        <input type="hidden" name="req" value="{{ req_display }}" />
+        <label for="plot_mode">Plot mode:</label>
+        <select id="plot_mode" name="plot_mode" onchange="this.form.submit()">
+          <option value="voltage" {% if plot_mode == 'voltage' %}selected{% endif %}>Voltage</option>
+          <option value="power" {% if plot_mode == 'power' %}selected{% endif %}>Power</option>
+        </select>
+        <label for="downsample">Downsample:</label>
+        <input type="number" id="downsample" name="downsample" min="1" max="100" value="{{ downsample_percent }}" style="width: 60px;" />
+        <input type="submit" value="Update Plot" />
+      </form>
+    </div>
+
+    <div id="plot">
+      {{ plot | safe }}
+    </div>
+
+    <div class="navigation">
+      <p><a href="{{ url_for('list_files') }}">← Back to file list</a></p>
+    </div>
+  </body>
+</html>

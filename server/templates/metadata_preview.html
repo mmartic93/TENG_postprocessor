@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Metadata Preview</title>
+  </head>
+  <body>
+    <h1>Metadata Preview</h1>
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul>
+        {% for msg in messages %}
+          <li>{{ msg }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <p>Columns shown from CSV metadata: <strong>{{ required_columns | join(', ') }}</strong></p>
+
+    <table border="1" cellpadding="4" cellspacing="0">
+      <thead>
+        <tr>
+          <th>Row</th>
+          <th>ExpId</th>
+          <th>TribuId</th>
+          <th>RloadId</th>
+          <th>DaqFile</th>
+          <th>MotorFile</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{{ row.row_number }}</td>
+            <td>{{ row.ExpId }}</td>
+            <td>{{ row.TribuId }}</td>
+            <td>{{ row.RloadId }}</td>
+            <td>{{ row.DaqFile }}</td>
+            <td>{{ row.MotorFile }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h2>Select sample by TribuId</h2>
+    <form method="post">
+      <label for="tribuid">TribuId:</label>
+      <input id="tribuid" name="tribuid" type="text" value="{{ selected_tribuid or '' }}" required />
+      <button type="submit">Select</button>
+    </form>
+
+    <p><a href="{{ url_for('index') }}">Upload a different metadata CSV</a></p>
+  </body>
+</html>

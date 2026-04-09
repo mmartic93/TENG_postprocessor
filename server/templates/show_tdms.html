@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>TDMS Preview - {{ filename }}</title>
+  </head>
+  <body>
+    <h1>TDMS Preview: {{ filename }}</h1>
+    {% for g in groups %}
+      <h2>Group: {{ g.name }}</h2>
+      <ul>
+        {% for ch in g.channels %}
+          <li>
+            <strong>Channel: {{ ch.name }}</strong>
+            <div>Properties:
+              <ul>
+                {% for k, v in ch.properties.items() %}
+                  <li>{{ k }}: {{ v }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+            <div>Preview (first {{ ch.preview|length }} values):
+              <pre>{{ ch.preview }}</pre>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endfor %}
+    <p><a href="{{ url_for('list_files') }}">Back to list</a></p>
+  </body>
+</html>
