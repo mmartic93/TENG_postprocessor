@@ -76,3 +76,4 @@ This project requires Python and the following packages in the virtual environme
 - Use the full metadata path so relative file links resolve against the correct folder.
 - The app currently resolves file paths relative to the metadata file location.
 - If a file is missing, the UI will display an error for that row.
+- Here is a new up date
