@@ -135,7 +135,7 @@ def register_routes(app):
 
         file_entries = []
         for pair in file_pairs:
-            entry = {'exp_id': pair['exp_id'], 'rload_id': pair.get('rload_id', '')}
+            entry = {'exp_id': pair['exp_id'], 'rload_id': pair.get('rload_id', ''),'tribu_id': pair.get('tribu_id', '')}
             if loads_info_df is not None:
                 load_info = lookup_load_info(loads_info_df, pair.get('rload_id', ''))
                 entry['req'] = load_info['Req']
@@ -197,30 +197,38 @@ def register_routes(app):
 
             file_entries.append(entry)
 
-        # Create Mean Power vs Req plot
-        data_points_Power = [
-            (float(entry['req']), entry['mean_power'])
-            for entry in file_entries
-            if entry.get('mean_power') is not None and entry.get('req')
-        ]
-        data_points_Vpp = [
-            (float(entry['req']), entry['mean_vpp'])
-            for entry in file_entries
-            if entry.get('mean_vpp') is not None and entry.get('req')
-        ]
+        from collections import defaultdict
+
+        grouped_power_data = defaultdict(list)
+        grouped_vpp_data = defaultdict(list)
+
+        for entry in file_entries:
+            req = entry.get('req')
+            t_id = entry.get('tribu_id', 'Unknown')
+            if req:
+                req_val = float(req)
+                if entry.get('mean_power') is not None:
+                    grouped_power_data[t_id].append((req_val, entry['mean_power']))
+                if entry.get('mean_vpp') is not None:
+                    grouped_vpp_data[t_id].append((req_val, entry['mean_vpp']))
+
+        # Pass the dictionaries to the plots
         mean_power_plot = None
-        mean_vpp_plot = None  # Inicializamos
+        mean_vpp_plot = None
         try:
-            if data_points_Power:
-                mean_power_plot = create_mean_power_vs_req_plot(data_points_Power, f'Mean Power vs Resistance for TribuId {selected_tribuid}')
-            if data_points_Vpp:
+            if grouped_power_data:
+                mean_power_plot = create_mean_power_vs_req_plot(
+                    grouped_power_data,
+                    f'Mean Power vs Resistance ({selected_tribuid})'
+                )
+            if grouped_vpp_data:
                 from data_processing.preview_service import create_mean_vpp_vs_req_plot
                 mean_vpp_plot = create_mean_vpp_vs_req_plot(
-                    data_points_Vpp,
-                    f'Mean Vpp vs Resistance for TribuId {selected_tribuid}'
+                    grouped_vpp_data,
+                    f'Mean Vpp vs Resistance ({selected_tribuid})'
                 )
         except Exception as e:
-                print(f"Error generando gráficas: {e}")
+            print(f"Error generando gráficas: {e}")
 
         return render_template(
             'view_files.html',
