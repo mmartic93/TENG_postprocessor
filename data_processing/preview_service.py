@@ -14,6 +14,13 @@ try:
 except Exception:
     HAS_PLOTLY = False
 
+# Nueva importación para detectar picos
+try:
+    from scipy.signal import find_peaks
+    HAS_SCIPY = True
+except Exception:
+    HAS_SCIPY = False
+
 
 def csv_to_dataframe(path: str) -> pd.DataFrame:
     """Load CSV file as pandas DataFrame."""
@@ -88,8 +95,9 @@ def calculate_mean_power_from_file(path: str, ext: str, gain: float, req: float)
     return calculate_mean_power(df, gain, req)
 
 
-def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_percent: int = 80, gain: float = None, plot_mode: str = 'voltage', req: float = None) -> str:
-    """Create interactive Plotly scatter plot from DataFrame with optional downsampling."""
+def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_percent: int = 80, gain: float = None,
+                     plot_mode: str = 'voltage', req: float = None) -> str:
+    """Create interactive Plotly scatter plot from DataFrame with relative peak detection for Vpp."""
     if not HAS_PLOTLY:
         raise RuntimeError('plotly library is not installed')
 
@@ -101,7 +109,51 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
             raise ValueError('Req value is required for power plot')
         df = calculate_power_dataframe(df, req)
 
-    # Apply downsampling if requested
+    # Identificar columnas ANTES del downsampling
+    time_col = 'Time(s)' if 'Time(s)' in df.columns else None
+    plot_columns = [col for col in df.columns if col.lower() != 'index' and col != time_col]
+
+    if not plot_columns:
+        raise ValueError('No data columns to plot (only index column found)')
+
+    vpp_info = None
+    if plot_mode == 'voltage':
+        if not HAS_SCIPY:
+            raise RuntimeError('scipy is required for peak detection. Run: pip install scipy')
+
+        primary_col = plot_columns[0]
+        y_data = df[primary_col].values
+
+        # Calcular un valor de "prominencia" dinámico basado en la desviación estándar
+        # Esto evita que el ruido de fondo se detecte como picos falsos.
+        dinamic_prominence = np.std(y_data) * 0.5
+
+        # Encontrar índices de máximos relativos (picos positivos)
+        peaks_idx, _ = find_peaks(y_data, prominence=dinamic_prominence)
+
+        # Encontrar índices de mínimos relativos (invirtiendo la señal)
+        troughs_idx, _ = find_peaks(-y_data, prominence=dinamic_prominence)
+
+        if len(peaks_idx) > 0 and len(troughs_idx) > 0:
+            # Calcular las medias
+            mean_max = np.mean(y_data[peaks_idx])
+            mean_min = np.mean(y_data[troughs_idx])
+            vpp_mean = mean_max - mean_min
+
+            # Guardar coordenadas exactas X e Y de todos los picos para graficarlos
+            x_peaks = df.loc[peaks_idx, time_col] if time_col else peaks_idx
+            y_peaks = y_data[peaks_idx]
+
+            x_troughs = df.loc[troughs_idx, time_col] if time_col else troughs_idx
+            y_troughs = y_data[troughs_idx]
+
+            vpp_info = {
+                'x_peaks': x_peaks, 'y_peaks': y_peaks,
+                'x_troughs': x_troughs, 'y_troughs': y_troughs,
+                'mean_max': mean_max, 'mean_min': mean_min, 'vpp': vpp_mean
+            }
+
+    # Aplicar downsampling al DataFrame principal
     original_length = len(df)
     if downsample_percent < 100:
         target_size = max(1, int(original_length * (downsample_percent / 100.0)))
@@ -109,61 +161,56 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
             indices = np.linspace(0, original_length - 1, target_size, dtype=int)
             df = df.iloc[indices].copy()
 
-    # Check for Time column to use as X-axis
-    time_col = None
-    if 'Time(s)' in df.columns:
-        time_col = 'Time(s)'
-    
-    # Filter out 'index' column and time column if it exists
-    plot_columns = [col for col in df.columns if col.lower() != 'index' and col != time_col]
-    if not plot_columns:
-        raise ValueError('No data columns to plot (only index column found)')
+    # Eje X
+    x_values = df[time_col] if time_col else None
+    x_title = 'Time (s)' if time_col else 'Index'
 
-    # Determine X-axis values
-    if time_col and time_col in df.columns:
-        x_values = df[time_col]
-        x_title = 'Time (s)'
-    else:
-        x_values = None
-        x_title = 'Index'
+    fig = go.Figure()
 
-    # Handle single or multiple columns
+    # Trazos de datos
     if len(plot_columns) == 1:
-        # Single column - plot against time or index
         col = plot_columns[0]
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=x_values,
-            y=df[col],
-            mode='lines+markers',
-            name=col,
-            line=dict(color='blue', width=2),
-        ))
-        fig.update_layout(
-            title=f'{title} (sampled {downsample_percent}%)',
-            xaxis_title=x_title,
-            yaxis_title=col,
-            hovermode='x unified',
-            height=600,
-        )
+        fig.add_trace(go.Scatter(x=x_values, y=df[col], mode='lines', name=col, line=dict(color='blue', width=1.5)))
     else:
-        # Multiple columns - plot all against time or index
-        fig = go.Figure()
         for col in plot_columns:
-            fig.add_trace(go.Scatter(
-                x=x_values,
-                y=df[col],
-                mode='lines+markers',
-                name=col,
-            ))
-        fig.update_layout(
-            title=f'{title} (sampled {downsample_percent}%)',
-            xaxis_title=x_title,
-            yaxis_title='Value',
-            hovermode='x unified',
-            height=600,
-        )
-    
+            fig.add_trace(go.Scatter(x=x_values, y=df[col], mode='lines', name=col))
+
+    plot_title = f'{title} (sampled {downsample_percent}%)'
+
+    # Añadir marcadores y medias de Vpp si se encontraron
+    if vpp_info:
+        # Marcadores de todos los picos positivos
+        fig.add_trace(go.Scatter(
+            x=vpp_info['x_peaks'], y=vpp_info['y_peaks'],
+            mode='markers', name='Maximos Relativos',
+            marker=dict(color='green', size=6, symbol='circle')
+        ))
+
+        # Marcadores de todos los picos negativos
+        fig.add_trace(go.Scatter(
+            x=vpp_info['x_troughs'], y=vpp_info['y_troughs'],
+            mode='markers', name='Minimos Relativos',
+            marker=dict(color='red', size=6, symbol='circle')
+        ))
+
+        # Línea horizontal para la media de los máximos
+        fig.add_hline(y=vpp_info['mean_max'], line_dash="dash", line_color="green",
+                      annotation_text=f"Media Max: {vpp_info['mean_max']:.2f}")
+
+        # Línea horizontal para la media de los mínimos
+        fig.add_hline(y=vpp_info['mean_min'], line_dash="dash", line_color="red",
+                      annotation_text=f"Media Min: {vpp_info['mean_min']:.2f}")
+
+        plot_title += f' | Mean Vpp: {vpp_info["vpp"]:.3f}'
+
+    fig.update_layout(
+        title=plot_title,
+        xaxis_title=x_title,
+        yaxis_title='Voltage' if plot_mode == 'voltage' else 'Value',
+        hovermode='x unified',
+        height=600,
+    )
+
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 
