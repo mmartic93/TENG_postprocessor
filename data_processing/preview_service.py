@@ -76,7 +76,7 @@ def apply_gain_to_dataframe(df: pd.DataFrame, gain: float) -> pd.DataFrame:
         if col.lower() == 'index':
             continue
         if pd.api.types.is_numeric_dtype(result[col]):
-            result[col] = result[col].astype(float) * gain
+            result[col] = result[col].astype(float) / gain
     return result
 
 
