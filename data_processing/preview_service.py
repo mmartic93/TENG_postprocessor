@@ -2,6 +2,7 @@ import pandas as pd
 import json
 import numpy as np
 import scipy
+from scipy.signal import butter, filtfilt
 
 try:
     from nptdms import TdmsFile
@@ -26,6 +27,16 @@ except Exception:
 
 
 # --- LOADERS ---
+def apply_lowpass_filter(data: np.ndarray, cutoff: float = 0.05, order: int = 2) -> np.ndarray:
+    """
+    Applies a Butterworth lowpass filter to smooth out high-frequency noise.
+    'cutoff' is relative to Nyquist frequency (0.5 is half the sample rate).
+    """
+    try:
+        b, a = butter(order, cutoff, btype='low', analog=False)
+        return filtfilt(b, a, data)
+    except Exception:
+        return data # Fallback to raw data if filtering fails
 
 def csv_to_dataframe(path: str) -> pd.DataFrame:
     """Load CSV file as pandas DataFrame."""
@@ -85,29 +96,39 @@ def calculate_power_dataframe(df: pd.DataFrame, req: float) -> pd.DataFrame:
 # --- CALCULATION LOGIC (VPP & POWER) ---
 
 def calculate_mean_vpp(df: pd.DataFrame, gain: float) -> float:
-    """Core logic to detect peaks and calculate mean Vpp."""
+    """Core logic to detect peaks using adaptive statistical thresholds."""
     if not HAS_SCIPY:
         return 0.0
 
     df_gain = apply_gain_to_dataframe(df, gain)
-
-    # Identify data column
     time_col = 'Time(s)' if 'Time(s)' in df_gain.columns else None
     plot_columns = [col for col in df_gain.columns if col.lower() != 'index' and col != time_col]
 
     if not plot_columns:
         return 0.0
 
-    y_data = df_gain[plot_columns[0]].values
+    raw_y = df_gain[plot_columns[0]].values
 
-    # Dynamic peak detection
-    dynamic_prominence = np.std(y_data) * 0.5
-    peaks_idx, _ = find_peaks(y_data, prominence=dynamic_prominence, height=0.1)
-    troughs_idx, _ = find_peaks(-y_data, prominence=dynamic_prominence, height=0.1)
+    # 1. Smooth the signal to avoid detecting noise-jitter as peaks
+    y_smooth = apply_lowpass_filter(raw_y)
+
+    # 2. Dynamic Thresholding based on Standard Deviation (sigma)
+    # This automatically scales whether your signal is 0.01V or 100V
+    std_val = np.std(y_smooth)
+
+    # height: ignore anything smaller than 0.5 sigma from the mean
+    # prominence: the peak must stand out significantly relative to its neighbors
+    dynamic_height = std_val * 0.5
+    dynamic_prominence = std_val * 0.7
+
+    peaks_idx, _ = find_peaks(y_smooth, height=dynamic_height, prominence=dynamic_prominence)
+    troughs_idx, _ = find_peaks(-y_smooth, height=dynamic_height, prominence=dynamic_prominence)
 
     if len(peaks_idx) > 0 and len(troughs_idx) > 0:
-        mean_max = np.mean(y_data[peaks_idx])
-        mean_min = np.mean(y_data[troughs_idx])
+        # We find indices on the smooth signal but average the values from the
+        # original raw data to preserve actual recorded magnitude.
+        mean_max = np.mean(raw_y[peaks_idx])
+        mean_min = np.mean(raw_y[troughs_idx])
         return float(mean_max - mean_min)
     return 0.0
 
@@ -164,19 +185,23 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
     vpp_info = None
     if plot_mode == 'voltage' and HAS_SCIPY:
         primary_col = plot_columns[0]
-        y_data = df[primary_col].values
-        dinamic_prominence = np.std(y_data) * 0.5
-        peaks_idx, _ = find_peaks(y_data, prominence=dinamic_prominence, height=0.1)
-        troughs_idx, _ = find_peaks(-y_data, prominence=dinamic_prominence, height=0.1)
+        raw_y = df[primary_col].values
+
+        # Sync plotting logic with calculation logic
+        y_smooth = apply_lowpass_filter(raw_y)
+        std_val = np.std(y_smooth)
+
+        peaks_idx, _ = find_peaks(y_smooth, height=std_val * 0.5, prominence=std_val * 0.7)
+        troughs_idx, _ = find_peaks(-y_smooth, height=std_val * 0.5, prominence=std_val * 0.7)
 
         if len(peaks_idx) > 0 and len(troughs_idx) > 0:
-            mean_max = np.mean(y_data[peaks_idx])
-            mean_min = np.mean(y_data[troughs_idx])
+            mean_max = np.mean(raw_y[peaks_idx])
+            mean_min = np.mean(raw_y[troughs_idx])
             vpp_info = {
                 'x_peaks': df.loc[peaks_idx, time_col] if time_col else peaks_idx,
-                'y_peaks': y_data[peaks_idx],
+                'y_peaks': raw_y[peaks_idx],
                 'x_troughs': df.loc[troughs_idx, time_col] if time_col else troughs_idx,
-                'y_troughs': y_data[troughs_idx],
+                'y_troughs': raw_y[troughs_idx],
                 'mean_max': mean_max, 'mean_min': mean_min, 'vpp': mean_max - mean_min
             }
 
