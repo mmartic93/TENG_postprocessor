@@ -106,7 +106,7 @@ def get_signal_peaks(y_raw: np.ndarray):
     # 2. Unified Parameters (Sigma-based thresholding + Minimum distance)
     # distance=300 helps avoid multiple detections in noisy wave cycles
     params = {
-        'height': std_val * 0.2,
+        'height': std_val * 0.5,
         'prominence': std_val * 1.2,
         'distance': 300
     }
