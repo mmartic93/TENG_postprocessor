@@ -215,15 +215,15 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 
-def create_mean_power_vs_req_plot(data_points: list, title: str = 'Mean Power vs Resistance') -> str:
+def create_mean_power_vs_req_plot(data_points_Power: list, title: str = 'Mean Power vs Resistance') -> str:
     """Create a scatter plot of mean power vs Req from list of (req, mean_power) tuples."""
     if not HAS_PLOTLY:
         raise RuntimeError('plotly library is not installed')
 
-    if not data_points:
+    if not data_points_Power:
         return '<p>No data available for Mean Power vs Resistance plot.</p>'
 
-    reqs, powers = zip(*data_points)
+    reqs, powers = zip(*data_points_Power)
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=reqs,
@@ -242,7 +242,7 @@ def create_mean_power_vs_req_plot(data_points: list, title: str = 'Mean Power vs
     return fig.to_html(include_plotlyjs='cdn', div_id='mean_power_plot')
 
 
-def create_mean_vpp_vs_req_plot(data_points: list, title: str = 'Mean Vpp vs Resistance') -> str:
+def create_mean_vpp_vs_req_plot(data_points_Vpp: list, title: str = 'Mean Vpp vs Resistance') -> str:
     """
     Crea una gráfica de dispersión de la media de Vpp vs Resistencia (Req)
     a partir de una lista de tuplas (req, mean_vpp).
@@ -250,11 +250,11 @@ def create_mean_vpp_vs_req_plot(data_points: list, title: str = 'Mean Vpp vs Res
     if not HAS_PLOTLY:
         raise RuntimeError('plotly library is not installed')
 
-    if not data_points:
+    if not data_points_Vpp:
         return '<p>No data available for Mean Vpp vs Resistance plot.</p>'
 
     # Desempaquetamos los valores de resistencia y Vpp
-    reqs, vpps = zip(*data_points)
+    reqs, vpps = zip(*data_points_Vpp)
 
     fig = go.Figure()
 

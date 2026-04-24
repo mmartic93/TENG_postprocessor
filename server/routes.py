@@ -203,7 +203,7 @@ def register_routes(app):
             for entry in file_entries
             if entry.get('mean_power') is not None and entry.get('req')
         ]
-        data_points_vpp = [
+        data_points_Vpp = [
             (float(entry['req']), entry['mean_vpp'])
             for entry in file_entries
             if entry.get('mean_vpp') is not None and entry.get('req')
@@ -216,7 +216,7 @@ def register_routes(app):
             if data_points_Vpp:
                 from data_processing.preview_service import create_mean_vpp_vs_req_plot
                 mean_vpp_plot = create_mean_vpp_vs_req_plot(
-                    data_points_vpp,
+                    data_points_Vpp,
                     f'Mean Vpp vs Resistance for TribuId {selected_tribuid}'
                 )
         except Exception as e:
