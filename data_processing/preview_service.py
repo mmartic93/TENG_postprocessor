@@ -27,7 +27,7 @@ except Exception:
 
 
 # --- LOADERS ---
-def apply_lowpass_filter(data: np.ndarray, cutoff: float = 0.15, order: int = 2) -> np.ndarray:
+def apply_lowpass_filter(data: np.ndarray, cutoff: float = 0.3, order: int = 2) -> np.ndarray:
     """
     Applies a Butterworth lowpass filter to smooth out high-frequency noise.
     'cutoff' is relative to Nyquist frequency (0.5 is half the sample rate).
