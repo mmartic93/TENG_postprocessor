@@ -27,7 +27,7 @@ except Exception:
 
 
 # --- LOADERS ---
-def apply_lowpass_filter(data: np.ndarray, cutoff: float = 0.05, order: int = 2) -> np.ndarray:
+def apply_lowpass_filter(data: np.ndarray, cutoff: float = 0.15, order: int = 2) -> np.ndarray:
     """
     Applies a Butterworth lowpass filter to smooth out high-frequency noise.
     'cutoff' is relative to Nyquist frequency (0.5 is half the sample rate).
@@ -110,7 +110,7 @@ def calculate_mean_vpp(df: pd.DataFrame, gain: float) -> float:
     raw_y = df_gain[plot_columns[0]].values
 
     # 1. Smooth the signal to avoid detecting noise-jitter as peaks
-    y_smooth = apply_lowpass_filter(raw_y)
+    y_smooth = apply_lowpass_filter(raw_y,cutoff=0.2)
 
     # 2. Dynamic Thresholding based on Standard Deviation (sigma)
     # This automatically scales whether your signal is 0.01V or 100V
@@ -118,8 +118,8 @@ def calculate_mean_vpp(df: pd.DataFrame, gain: float) -> float:
 
     # height: ignore anything smaller than 0.5 sigma from the mean
     # prominence: the peak must stand out significantly relative to its neighbors
-    dynamic_height = std_val * 0.5
-    dynamic_prominence = std_val * 0.7
+    dynamic_height = std_val * 0.1
+    dynamic_prominence = std_val * 0.3
 
     peaks_idx, _ = find_peaks(y_smooth, height=dynamic_height, prominence=dynamic_prominence)
     troughs_idx, _ = find_peaks(-y_smooth, height=dynamic_height, prominence=dynamic_prominence)
