@@ -1,6 +1,7 @@
 import pandas as pd
 import json
 import numpy as np
+import scipy
 
 try:
     from nptdms import TdmsFile
@@ -129,10 +130,10 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
         dinamic_prominence = np.std(y_data) * 0.5
 
         # Encontrar índices de máximos relativos (picos positivos)
-        peaks_idx, _ = find_peaks(y_data, prominence=dinamic_prominence)
+        peaks_idx, _ = find_peaks(y_data, prominence=dinamic_prominence,height=0.05)
 
         # Encontrar índices de mínimos relativos (invirtiendo la señal)
-        troughs_idx, _ = find_peaks(-y_data, prominence=dinamic_prominence)
+        troughs_idx, _ = find_peaks(-y_data, prominence=dinamic_prominence,height=0.05)
 
         if len(peaks_idx) > 0 and len(troughs_idx) > 0:
             # Calcular las medias
