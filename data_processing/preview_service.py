@@ -164,7 +164,7 @@ def calculate_mean_vpp_from_file(path: str, ext: str, gain: float) -> float:
 
 # --- PLOTTING ---
 
-def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_percent: int = 80, gain: float = None,
+def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_percent: int = 100, gain: float = None,
                      plot_mode: str = 'voltage', req: float = None) -> str:
     if not HAS_PLOTLY:
         raise RuntimeError('plotly library is not installed')
