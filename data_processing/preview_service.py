@@ -110,16 +110,16 @@ def calculate_mean_vpp(df: pd.DataFrame, gain: float) -> float:
     raw_y = df_gain[plot_columns[0]].values
 
     # 1. Smooth the signal to avoid detecting noise-jitter as peaks
-    y_smooth = apply_lowpass_filter(raw_y,cutoff=0.2)
+    y_smooth = apply_lowpass_filter(raw_y,cutoff=0.3)
 
     # 2. Dynamic Thresholding based on Standard Deviation (sigma)
     # This automatically scales whether your signal is 0.01V or 100V
     std_val = np.std(y_smooth)
 
-    # height: ignore anything smaller than 0.5 sigma from the mean
+    # height: ignore anything smaller than 0.2 sigma from the mean
     # prominence: the peak must stand out significantly relative to its neighbors
-    #dynamic_height = std_val * 0.1
-    dynamic_prominence = std_val * 0.3
+    dynamic_height = std_val * 0.2
+    dynamic_prominence = std_val * 1
 
     peaks_idx, _ = find_peaks(y_smooth, height=dynamic_height, prominence=dynamic_prominence)
     troughs_idx, _ = find_peaks(-y_smooth, height=dynamic_height, prominence=dynamic_prominence)
