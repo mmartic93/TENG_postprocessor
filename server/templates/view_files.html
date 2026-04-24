@@ -31,77 +31,86 @@
       </form>
     </div>
 
-    <table border="1" cellpadding="8" cellspacing="0">
-      <thead>
-        <tr>
-          <th>ExpId</th>
-          <th>RloadId</th>
-          <th>Req</th>
-          <th>Gain</th>
-          <th>Mean Power (W)</th>
-          <th>DAQ File</th>
-          <th>Motor File</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for f in files %}
-          <tr>
-            <td>{{ f.exp_id }}</td>
-            <td>
-              {{ f.rload_id or '—' }}
-              {% if f.rload_missing %}
-                <br/><em style="color: red;">RloadId not found</em>
-              {% endif %}
-              {% if f.loads_description_error %}
-                <br/><em style="color: red;">{{ f.loads_description_error }}</em>
-              {% endif %}
-            </td>
-            <td>{{ f.req or '—' }}</td>
-            <td>{{ f.gain or '—' }}</td>
-            <td>
-              {% if f.mean_power is not none %}
-                {{ '%.4g' | format(f.mean_power) }}
-              {% else %}
-                —
-              {% endif %}
-            </td>
-            <td>
-              {% if f.daq_rel %}
-                <strong>{{ f.daq_rel }}</strong>
-                {% if f.daq_error %}
-                  <br/><em style="color: red;">{{ f.daq_error }}</em>
-                {% else %}
-                  <br/><a href="{{ url_for('view_file') }}?rel={{ f.daq_rel|urlencode }}&downsample={{ downsample_percent }}{% if f.gain %}&gain={{ f.gain|urlencode }}{% endif %}{% if f.req %}&req={{ f.req|urlencode }}{% endif %}">View</a>
-                  {% if f.gain and f.req %}
-                    | <a href="{{ url_for('view_file') }}?rel={{ f.daq_rel|urlencode }}&downsample={{ downsample_percent }}&plot_mode=power&gain={{ f.gain|urlencode }}&req={{ f.req|urlencode }}">View Power</a>
-                  {% endif %}
-                  {% if has_tdms and f.daq_ext == '.tdms' %}
-                    (TDMS)
-                  {% endif %}
-                {% endif %}
-              {% else %}
-                <em>—</em>
-              {% endif %}
-            </td>
-            <td>
-              {% if f.motor_rel %}
-                <strong>{{ f.motor_rel }}</strong>
-                {% if f.motor_error %}
-                  <br/><em style="color: red;">{{ f.motor_error }}</em>
-                {% else %}
-                  <br/><a href="{{ url_for('view_file') }}?rel={{ f.motor_rel|urlencode }}&downsample={{ downsample_percent }}">View</a>
-                  {% if f.motor_ext == '.csv' %}
-                    (CSV)
-                  {% endif %}
-                {% endif %}
-              {% else %}
-                <em>—</em>
-              {% endif %}
-            </td>
+    {% for tribu_id, group in files | groupby('tribu_id') %}
+
+    <div class="tribuid-section" style="margin-top: 30px; border-top: 2px solid #3498db; padding-top: 10px;">
+      <h2 style="color: #2c3e50;">TribuId: {{ tribu_id }}</h2>
+
+      <table border="1" cellpadding="8" cellspacing="0" style="width: 100%;">
+        <thead>
+          <tr style="background-color: #f2f2f2;">
+            <th>ExpId</th>
+            <th>RloadId</th>
+            <th>Req</th>
+            <th>Gain</th>
+            <th>Mean Power (W)</th>
+            <th>DAQ File</th>
+            <th>Motor File</th>
           </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for f in group %}
+            <tr>
+              <td>{{ f.exp_id }}</td>
+              <td>
+                {{ f.rload_id or '—' }}
+                {% if f.rload_missing %}
+                  <br/><em style="color: red;">RloadId not found</em>
+                {% endif %}
+                {% if f.loads_description_error %}
+                  <br/><em style="color: red;">{{ f.loads_description_error }}</em>
+                {% endif %}
+              </td>
+              <td>{{ f.req or '—' }}</td>
+              <td>{{ f.gain or '—' }}</td>
+              <td>
+                {% if f.mean_power is not none %}
+                  {{ '%.4g' | format(f.mean_power) }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td>
+                {% if f.daq_rel %}
+                  <strong>{{ f.daq_rel }}</strong>
+                  {% if f.daq_error %}
+                    <br/><em style="color: red;">{{ f.daq_error }}</em>
+                  {% else %}
+                    <br/><a href="{{ url_for('view_file') }}?rel={{ f.daq_rel|urlencode }}&downsample={{ downsample_percent }}{% if f.gain %}&gain={{ f.gain|urlencode }}{% endif %}{% if f.req %}&req={{ f.req|urlencode }}{% endif %}">View</a>
+                    {% if f.gain and f.req %}
+                      | <a href="{{ url_for('view_file') }}?rel={{ f.daq_rel|urlencode }}&downsample={{ downsample_percent }}&plot_mode=power&gain={{ f.gain|urlencode }}&req={{ f.req|urlencode }}">View Power</a>
+                    {% endif %}
+                    {% if has_tdms and f.daq_ext == '.tdms' %}
+                      (TDMS)
+                    {% endif %}
+                  {% endif %}
+                {% else %}
+                  <em>—</em>
+                {% endif %}
+              </td>
+              <td>
+                {% if f.motor_rel %}
+                  <strong>{{ f.motor_rel }}</strong>
+                  {% if f.motor_error %}
+                    <br/><em style="color: red;">{{ f.motor_error }}</em>
+                  {% else %}
+                    <br/><a href="{{ url_for('view_file') }}?rel={{ f.motor_rel|urlencode }}&downsample={{ downsample_percent }}">View</a>
+                    {% if f.motor_ext == '.csv' %}
+                      (CSV)
+                    {% endif %}
+                  {% endif %}
+                {% else %}
+                  <em>—</em>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <p>No files found for the selected TribuId(s).</p>
+    {% endfor %}
 
     {% if mean_power_plot %}
       <div class="plot-container" style="margin-bottom: 0;">
