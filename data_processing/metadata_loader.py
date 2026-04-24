@@ -45,10 +45,23 @@ def get_required_columns() -> List[str]:
     return REQUIRED_META_COLUMNS
 
 
-def get_rows_for_tribuid(df: pd.DataFrame, tribuid: str) -> pd.DataFrame:
+def get_rows_for_tribuid(df: pd.DataFrame, tribuid_input: str) -> pd.DataFrame:
+    """
+    Handles both a single ID and a comma-separated string of IDs.
+    """
     if 'TribuId' not in df.columns:
         raise ValueError('Missing TribuId column in metadata')
-    filtered = df[df['TribuId'].astype(str).str.strip() == tribuid.strip()]
+
+    # 1. Split the string by comma and remove whitespace
+    # If tribuid_input is "ID1, ID2", this creates ['ID1', 'ID2']
+    target_ids = [id.strip() for id in tribuid_input.split(',') if id.strip()]
+
+    # 2. Use .isin() to filter for all IDs in the list
+    filtered = df[df['TribuId'].astype(str).str.strip().isin(target_ids)]
+
+    if filtered.empty:
+        raise ValueError(f'None of the TribuIds {target_ids} were found in metadata')
+
     return filtered.reset_index(drop=True)
 
 
@@ -129,11 +142,18 @@ def get_paired_files(df: pd.DataFrame) -> List[Dict[str, str]]:
             val = row['ExpId']
             if pd.notna(val) and str(val).strip():
                 exp_id = str(val).strip()
-        
+
+        tribu_id = ''
+        if 'TribuId' in df.columns:
+            val = row['TribuId']
+            if pd.notna(val) and str(val).strip():
+                tribu_id = str(val).strip()
+
         pairs.append({
             'daq': daq.replace('\\', '/'),
             'motor': motor.replace('\\', '/'),
             'exp_id': exp_id,
             'rload_id': rload_id,
+            'tribu_id': tribu_id,
         })
     return pairs
