@@ -206,22 +206,39 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 
-def create_mean_power_vs_req_plot(data_points: list, title: str = 'Mean Power vs Resistance') -> str:
-    """Scatter plot for Power vs Resistance."""
-    if not HAS_PLOTLY or not data_points:
+def create_mean_power_vs_req_plot(grouped_data: dict, title: str = 'Mean Power vs Resistance') -> str:
+    """Scatter plot for Power vs Resistance grouped by TribuId."""
+    if not HAS_PLOTLY or not grouped_data:
         return '<p>No data available</p>'
-    reqs, powers = zip(*data_points)
-    fig = go.Figure(go.Scatter(x=reqs, y=powers, mode='markers+lines', marker=dict(color='red')))
+
+    fig = go.Figure()
+
+    for tribu_id, data_points in grouped_data.items():
+        if not data_points:
+            continue
+        # Sort points by X-axis (Req) so the lines connect properly left-to-right
+        data_points.sort(key=lambda x: x[0])
+        reqs, powers = zip(*data_points)
+        fig.add_trace(go.Scatter(x=reqs, y=powers, mode='markers+lines', name=f'{tribu_id}'))
+
     fig.update_layout(title=title, xaxis_title='Resistance (Req) [ohms]', yaxis_title='Mean Power [W]', height=400)
     return fig.to_html(include_plotlyjs='cdn', div_id='mean_power_plot')
 
 
-def create_mean_vpp_vs_req_plot(data_points: list, title: str = 'Mean Vpp vs Resistance') -> str:
-    """Scatter plot for Vpp vs Resistance."""
-    if not HAS_PLOTLY or not data_points:
+def create_mean_vpp_vs_req_plot(grouped_data: dict, title: str = 'Mean Vpp vs Resistance') -> str:
+    """Scatter plot for Vpp vs Resistance grouped by TribuId."""
+    if not HAS_PLOTLY or not grouped_data:
         return '<p>No data available</p>'
-    reqs, vpps = zip(*data_points)
-    fig = go.Figure(go.Scatter(x=reqs, y=vpps, mode='markers+lines', marker=dict(color='blue')))
+
+    fig = go.Figure()
+
+    for tribu_id, data_points in grouped_data.items():
+        if not data_points:
+            continue
+        data_points.sort(key=lambda x: x[0])
+        reqs, vpps = zip(*data_points)
+        fig.add_trace(go.Scatter(x=reqs, y=vpps, mode='markers+lines', name=f'{tribu_id}'))
+
     fig.update_layout(title=title, xaxis_title='Resistance (Req) [ohms]', yaxis_title='Mean Vpp [V]', height=400)
     return fig.to_html(include_plotlyjs='cdn', div_id='mean_vpp_plot')
 
