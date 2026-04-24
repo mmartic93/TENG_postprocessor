@@ -130,10 +130,10 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
         dinamic_prominence = np.std(y_data) * 0.5
 
         # Encontrar índices de máximos relativos (picos positivos)
-        peaks_idx, _ = find_peaks(y_data, prominence=dinamic_prominence,height=0.05)
+        peaks_idx, _ = find_peaks(y_data, prominence=dinamic_prominence,height=0.1)
 
         # Encontrar índices de mínimos relativos (invirtiendo la señal)
-        troughs_idx, _ = find_peaks(-y_data, prominence=dinamic_prominence,height=0.05)
+        troughs_idx, _ = find_peaks(-y_data, prominence=dinamic_prominence,height=0.1)
 
         if len(peaks_idx) > 0 and len(troughs_idx) > 0:
             # Calcular las medias
