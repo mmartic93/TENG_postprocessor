@@ -119,10 +119,10 @@ def calculate_mean_vpp(df: pd.DataFrame, gain: float) -> float:
     # height: ignore anything smaller than 0.2 sigma from the mean
     # prominence: the peak must stand out significantly relative to its neighbors
     dynamic_height = std_val * 0.2
-    dynamic_prominence = std_val * 1
+    dynamic_prominence = std_val * 1.2
 
-    peaks_idx, _ = find_peaks(y_smooth, height=dynamic_height, prominence=dynamic_prominence)
-    troughs_idx, _ = find_peaks(-y_smooth, height=dynamic_height, prominence=dynamic_prominence)
+    peaks_idx, _ = find_peaks(y_smooth, height=dynamic_height, prominence=dynamic_prominence,distance=150)
+    troughs_idx, _ = find_peaks(-y_smooth, height=dynamic_height, prominence=dynamic_prominence,distance=150)
 
     if len(peaks_idx) > 0 and len(troughs_idx) > 0:
         # We find indices on the smooth signal but average the values from the
