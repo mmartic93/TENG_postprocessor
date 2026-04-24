@@ -168,8 +168,16 @@ def register_routes(app):
                                     float(entry['gain']),
                                     float(entry['req']),
                                 )
+                                from data_processing.preview_service import \
+                                    calculate_mean_vpp_from_file  # Asegúrate de crearla
+                                entry['mean_vpp'] = calculate_mean_vpp_from_file(
+                                    daq_path,
+                                    entry['daq_ext'],
+                                    float(entry['gain'])
+                                )
                             except Exception:
                                 entry['mean_power'] = None
+                                entry['mean_vpp'] = None  # Fallback
                 except Exception as error:
                     entry['daq_error'] = str(error)
             
@@ -190,17 +198,29 @@ def register_routes(app):
             file_entries.append(entry)
 
         # Create Mean Power vs Req plot
-        data_points = [
+        data_points_Power = [
             (float(entry['req']), entry['mean_power'])
             for entry in file_entries
             if entry.get('mean_power') is not None and entry.get('req')
         ]
+        data_points_vpp = [
+            (float(entry['req']), entry['mean_vpp'])
+            for entry in file_entries
+            if entry.get('mean_vpp') is not None and entry.get('req')
+        ]
         mean_power_plot = None
-        if data_points:
-            try:
-                mean_power_plot = create_mean_power_vs_req_plot(data_points, f'Mean Power vs Resistance for TribuId {selected_tribuid}')
-            except Exception:
-                mean_power_plot = None
+        mean_vpp_plot = None  # Inicializamos
+        try:
+            if data_points_Power:
+                mean_power_plot = create_mean_power_vs_req_plot(data_points_Power, f'Mean Power vs Resistance for TribuId {selected_tribuid}')
+            if data_points_Vpp:
+                from data_processing.preview_service import create_mean_vpp_vs_req_plot
+                mean_vpp_plot = create_mean_vpp_vs_req_plot(
+                    data_points_vpp,
+                    f'Mean Vpp vs Resistance for TribuId {selected_tribuid}'
+                )
+        except Exception as e:
+                print(f"Error generando gráficas: {e}")
 
         return render_template(
             'view_files.html',
@@ -211,6 +231,7 @@ def register_routes(app):
             downsample_percent=downsample_percent,
             loads_description_error=loads_description_error,
             mean_power_plot=mean_power_plot,
+            mean_vpp_plot=mean_vpp_plot,
         )
 
     @app.route('/view')
