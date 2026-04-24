@@ -183,24 +183,24 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
         # Marcadores de todos los picos positivos
         fig.add_trace(go.Scatter(
             x=vpp_info['x_peaks'], y=vpp_info['y_peaks'],
-            mode='markers', name='Maximos Relativos',
+            mode='markers', name='Relative Maximums',
             marker=dict(color='green', size=6, symbol='circle')
         ))
 
         # Marcadores de todos los picos negativos
         fig.add_trace(go.Scatter(
             x=vpp_info['x_troughs'], y=vpp_info['y_troughs'],
-            mode='markers', name='Minimos Relativos',
+            mode='markers', name='Relative Minimums',
             marker=dict(color='red', size=6, symbol='circle')
         ))
 
         # Línea horizontal para la media de los máximos
         fig.add_hline(y=vpp_info['mean_max'], line_dash="dash", line_color="green",
-                      annotation_text=f"Media Max: {vpp_info['mean_max']:.2f}")
+                      annotation_text=f"Mean Max: {vpp_info['mean_max']:.2f}")
 
         # Línea horizontal para la media de los mínimos
         fig.add_hline(y=vpp_info['mean_min'], line_dash="dash", line_color="red",
-                      annotation_text=f"Media Min: {vpp_info['mean_min']:.2f}")
+                      annotation_text=f"Mean Min: {vpp_info['mean_min']:.2f}")
 
         plot_title += f' | Mean Vpp: {vpp_info["vpp"]:.3f}'
 
