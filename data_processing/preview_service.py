@@ -242,6 +242,42 @@ def create_mean_power_vs_req_plot(data_points: list, title: str = 'Mean Power vs
     return fig.to_html(include_plotlyjs='cdn', div_id='mean_power_plot')
 
 
+def create_mean_vpp_vs_req_plot(data_points: list, title: str = 'Mean Vpp vs Resistance') -> str:
+    """
+    Crea una gráfica de dispersión de la media de Vpp vs Resistencia (Req)
+    a partir de una lista de tuplas (req, mean_vpp).
+    """
+    if not HAS_PLOTLY:
+        raise RuntimeError('plotly library is not installed')
+
+    if not data_points:
+        return '<p>No data available for Mean Vpp vs Resistance plot.</p>'
+
+    # Desempaquetamos los valores de resistencia y Vpp
+    reqs, vpps = zip(*data_points)
+
+    fig = go.Figure()
+
+    # Añadimos la traza de puntos
+    fig.add_trace(go.Scatter(
+        x=reqs,
+        y=vpps,
+        mode='markers+lines',  # Añadimos líneas para ver la tendencia
+        marker=dict(size=10, color='blue'),
+        name='Mean Vpp',
+    ))
+
+    fig.update_layout(
+        title=title,
+        xaxis_title='Resistance (Req) [ohms]',
+        yaxis_title='Mean Vpp [V]',
+        height=400,
+        template='plotly_white'
+    )
+
+    return fig.to_html(include_plotlyjs='cdn', div_id='mean_vpp_plot')
+
+
 def has_tdms_support() -> bool:
     return HAS_NPTDMS
 
