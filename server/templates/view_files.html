@@ -104,16 +104,14 @@
     </table>
 
     {% if mean_power_plot %}
-      <h3>Mean Power vs Resistance</h3>
-      <div id="mean_power_plot">
+      <div class="plot-container" style="margin-bottom: 0;">
         {{ mean_power_plot | safe }}
       </div>
     {% endif %}
 
     {% if mean_vpp_plot %}
-    <div class="plot-container">
-        {{ mean_vpp_plot | safe }}
-    </div>
+      <div class="plot-container" style="margin-top: -20px;"> {{ mean_vpp_plot | safe }}
+      </div>
     {% endif %}
 
     <p><a href="{{ url_for('metadata_preview') }}">Change TribuId selection</a></p>
