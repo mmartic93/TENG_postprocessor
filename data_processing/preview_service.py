@@ -63,7 +63,12 @@ def tdms_to_dataframe(path: str) -> pd.DataFrame:
         raise ValueError('TDMS file does not contain "Input 0" channel')
 
     data = target_channel[:]
-    return pd.DataFrame({'Input 0': data, 'index': range(len(data))})
+    # FIX: Calculate actual time in seconds using the channel properties
+    # Defaulting to 1000Hz (0.001s) if sampling information is missing
+    dt = target_channel.properties.get('wf_increment', 0.001)
+    time_s = np.arange(len(data)) * dt
+
+    return pd.DataFrame({'Input 0': data, 'Time(s)': time_s})
 
 
 # --- MATH HELPERS ---
@@ -231,45 +236,66 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
 
 
 # --- Multiple Y Axis plotting (V,Pos,F) ---
-def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=100, gain=1.0):
-    # 1. Create a figure with two Y-axes
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
+def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=100, gain=None):
+    if not HAS_PLOTLY:
+        raise RuntimeError('plotly library is not installed')
 
-    # 2. Add Motor Data (Primary Y-axis)
-    # Assumes motor_df has 'Time(s)' and 'Position' or 'Distance'
-    motor_time_col = next((c for c in motor_df.columns if 'time' in c.lower()), motor_df.columns[0])
-    motor_val_col = motor_df.columns[1]  # Usually the second column is the data
+    if gain is not None:
+        daq_df = apply_gain_to_dataframe(daq_df, gain)
 
-    fig.add_trace(
-        go.Scatter(x=motor_df[motor_time_col], y=motor_df[motor_val_col],
-                   name=f"Motor ({motor_val_col})", line=dict(color='blue')),
-        secondary_y=False,
-    )
+    fig = go.Figure()
 
-    # 3. Add DAQ Voltage Data (Secondary Y-axis)
-    # Assumes daq_df has 'Time(s)' and 'Voltage'
-    daq_time_col = next((c for c in daq_df.columns if 'time' in c.lower()), daq_df.columns[0])
-    daq_val_col = next((c for c in daq_df.columns if 'volt' in c.lower()), daq_df.columns[1])
+    # --- Helper to find columns by partial name ---
+    def find_col(df, keywords):
+        for col in df.columns:
+            if any(k.lower() in col.lower() for k in keywords) and "unnamed" not in col.lower():
+                return col
+        return None
 
-    # Apply gain to voltage if provided
-    voltage_data = daq_df[daq_val_col] * (float(gain) if gain else 1.0)
+    # 1. Identify Columns
+    v_col = find_col(daq_df, ['input 0', 'voltage'])
+    p_col = find_col(motor_df, ['position', 'actual position'])
+    f_col = find_col(motor_df, ['force', 'measured force'])
 
-    fig.add_trace(
-        go.Scatter(x=daq_df[daq_time_col], y=voltage_data,
-                   name="DAQ Voltage", line=dict(color='red', opacity=0.6)),
-        secondary_y=True,
-    )
+    # Identify Time columns or create them if missing
+    d_time = daq_df['Time(s)'] if 'Time(s)' in daq_df.columns else np.arange(len(daq_df))
+    m_time = motor_df['Time(s)'] if 'Time(s)' in motor_df.columns else None
 
-    # 4. Layout formatting
+    # If Motor CSV has no time, but recording duration is same as DAQ:
+    if m_time is None:
+        duration = d_time.max() if len(d_time) > 0 else 1
+        m_time = np.linspace(0, duration, len(motor_df))
+
+    # 2. Add Voltage (Primary Y-axis)
+    if v_col:
+        fig.add_trace(go.Scatter(x=d_time, y=daq_df[v_col], name="Voltage (V)",
+                                 line=dict(color='blue'), yaxis="y1"))
+
+    # 3. Add Position (Secondary Y-axis)
+    if p_col:
+        fig.add_trace(go.Scatter(x=m_time, y=motor_df[p_col], name="Position (mm)",
+                                 line=dict(color='orange'), yaxis="y2"))
+
+    # 4. Add Force (Tertiary Y-axis)
+    if f_col:
+        fig.add_trace(go.Scatter(x=m_time, y=motor_df[f_col], name="Force (N)",
+                                 line=dict(color='green'), yaxis="y3"))
+
+    # 5. Configure Triple Y-Axes Layout
     fig.update_layout(
         title=title,
-        xaxis_title="Time (s)",
-        hovermode="x unified"
+        xaxis=dict(title="Time (s)", domain=[0, 0.85]),  # Shrink X to fit 3rd axis
+        yaxis=dict(title="Voltage (V)", titlefont=dict(color="blue"), tickfont=dict(color="blue")),
+        yaxis2=dict(
+            title="Position (mm)", anchor="x", overlaying="y", side="right",
+            titlefont=dict(color="orange"), tickfont=dict(color="orange")
+        ),
+        yaxis3=dict(
+            title="Force (N)", anchor="free", overlaying="y", side="right",
+            position=0.95, titlefont=dict(color="green"), tickfont=dict(color="green")
+        ),
+        height=700, template="plotly_white", hovermode="x unified"
     )
-
-    fig.update_yaxes(title_text="<b>Motor</b> Data", secondary_y=False)
-    fig.update_yaxes(title_text="<b>Voltage</b> (V)", secondary_y=True)
-
     return fig.to_html(include_plotlyjs='cdn', div_id='combined_plot')
 
 def create_mean_power_vs_req_plot(grouped_data: dict, title: str = 'Mean Power vs Resistance') -> str:
