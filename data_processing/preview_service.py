@@ -118,7 +118,7 @@ def get_signal_peaks(y_raw: np.ndarray):
         return None, None, 0.0, 0.0, 0.0
 
     # 1. Uniform Smoothing
-    y_smooth = apply_lowpass_filter(y_raw, cutoff=0.9)
+    y_smooth = apply_lowpass_filter(y_raw, cutoff=1) #cutoff =1 is applying no filter
     std_val = np.std(y_smooth)
 
     # 2. Unified Parameters (Sigma-based thresholding + Minimum distance)
