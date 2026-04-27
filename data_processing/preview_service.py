@@ -84,7 +84,8 @@ def apply_gain_to_dataframe(df: pd.DataFrame, gain: float) -> pd.DataFrame:
         return df
     result = df.copy()
     for col in result.columns:
-        if col.lower() == 'index':
+        # EXCLUIR TIEMPO Y CUALQUIER VARIANTE DE INDEX
+        if col.lower() in ['index', 'time(s)', 'time']:
             continue
         if pd.api.types.is_numeric_dtype(result[col]):
             result[col] = result[col].astype(float) / gain
@@ -243,7 +244,7 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
 
     # Usar el nombre de la columna si existe, de lo contrario poner 'Index'
     x_label = time_col if time_col else 'Index'
-    fig.update_layout(title=title, xaxis_title=x_label, yaxis_title=plot_mode.capitalize(), height=600)
+    fig.update_layout(title=title, xaxis_title=x_label, yaxis_title="Voltage(V)", height=600)
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 
