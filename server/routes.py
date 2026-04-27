@@ -103,6 +103,7 @@ def register_routes(app):
 
     @app.route('/files')
     def list_files():
+
         metadata_path = session.get('metadata_path')
         selected_tribuid = session.get('selected_tribuid')
         downsample_percent = int(request.args.get('downsample', 80))
@@ -245,81 +246,79 @@ def register_routes(app):
     @app.route('/view')
     def view_file():
         metadata_path = session.get('metadata_path')
-        rel = request.args.get('rel')
-        downsample_percent = int(request.args.get('downsample', 80))
-        
+        rel = request.args.get('rel')  # This is the primary file clicked (Motor)
+        daq_rel = request.args.get('daq_rel')  # Passed from the template for combined view
+        downsample_percent = int(request.args.get('downsample', 100))
+
         if not metadata_path or not rel:
             flash('Missing parameters')
             return redirect(url_for('index'))
 
         meta_dir = os.path.dirname(metadata_path)
+
         try:
+            # Resolve path for the primary file
             target = resolve_relative_path(meta_dir, rel)
-        except ValueError:
-            flash('Path escapes metadata directory')
-            return redirect(url_for('list_files'))
-
-        if not file_exists(target):
-            flash(f'File not found: {target}')
-            return redirect(url_for('list_files'))
-
-        _, ext = os.path.splitext(target)
-        ext = ext.lower()
-        gain_value = request.args.get('gain', '').strip()
-        gain = None
-        if gain_value:
-            try:
-                gain = float(gain_value)
-            except ValueError:
-                flash('Invalid gain value provided for DAQ file')
+            if not file_exists(target):
+                flash(f'File not found: {target}')
                 return redirect(url_for('list_files'))
 
-        req_value = request.args.get('req', '').strip()
-        req = None
-        if req_value:
-            try:
-                req = float(req_value)
-            except ValueError:
-                flash('Invalid Req value provided for power plot')
-                return redirect(url_for('list_files'))
+            _, ext = os.path.splitext(target)
+            ext = ext.lower()
 
-        plot_mode = request.args.get('plot_mode', 'voltage')
-        mean_power = None
+            # Extract Gain and Req for processing
+            gain_value = request.args.get('gain', '').strip()
+            gain = float(gain_value) if gain_value else None
+            req_value = request.args.get('req', '').strip()
+            req = float(req_value) if req_value else None
 
-        try:
+            plot_mode = request.args.get('plot_mode', 'voltage')
+
+            # 1. Load the Primary Dataframe (Motor)
             if ext == '.csv':
                 df = csv_to_dataframe(target)
             elif ext == '.tdms':
                 if not has_tdms_support():
-                    flash('nptdms library not installed on server; cannot open TDMS files')
+                    flash('nptdms library not installed')
                     return redirect(url_for('list_files'))
                 df = tdms_to_dataframe(target)
             else:
                 flash(f'Unsupported file type: {ext}')
                 return redirect(url_for('list_files'))
 
-            original_rows = len(df)
-            plot_title = f"{ext.upper().strip('.')} : {rel}"
-            plot_html = create_plot_html(
-                df,
-                plot_title,
-                downsample_percent,
-                gain=gain,
-                plot_mode=plot_mode,
-                req=req,
-            )
-
-            if plot_mode == 'power' and gain is not None and req is not None:
+            # 2. Logic for Combined Plotting (Voltage + Motor)
+            # We check if daq_rel was provided (from the "View" button in the Motor column)
+            if daq_rel:
                 try:
-                    mean_power = calculate_mean_power_from_file(target, ext, gain, req)
-                except Exception:
-                    mean_power = None
+                    daq_abs = resolve_relative_path(meta_dir, daq_rel)
+                    _, daq_ext = os.path.splitext(daq_abs)
+                    # Load the voltage file
+                    daq_df = csv_to_dataframe(daq_abs) if daq_ext == '.csv' else tdms_to_dataframe(daq_abs)
 
-            downsampled_rows = len(df)
-            df_info = f'{downsampled_rows} rows × {len(df.columns)} columns'
-            if downsampled_rows != original_rows:
-                df_info += f' (downsampled from {original_rows} rows)'
+                    # Import and use a new combined plotting function
+                    from data_processing.preview_service import create_combined_motor_daq_plot
+                    plot_html = create_combined_motor_daq_plot(
+                        daq_df=daq_df,
+                        motor_df=df,
+                        title=f"Combined Analysis: {rel}",
+                        downsample_percent=downsample_percent,
+                        gain=gain
+                    )
+                except Exception as e:
+                    flash(f"Could not load associated voltage file: {e}")
+                    # Fallback to standard plot if combined fails
+                    plot_html = create_plot_html(df, f"Motor Data: {rel}", downsample_percent)
+            else:
+                # Standard single-file plot (existing logic)
+                plot_html = create_plot_html(df, f"{ext.upper()} : {rel}", downsample_percent, gain=gain,
+                                             plot_mode=plot_mode, req=req)
 
+            # Calculate mean power if in power mode
+            mean_power = None
+            if plot_mode == 'power' and gain is not None and req is not None:
+                mean_power = calculate_mean_power_from_file(target, ext, gain, req)
+
+            df_info = f'{len(df)} rows × {len(df.columns)} columns'
             return render_template(
                 'plot_view.html',
                 plot=plot_html,
@@ -330,7 +329,9 @@ def register_routes(app):
                 plot_mode=plot_mode,
                 req_display=req_value,
                 mean_power=mean_power,
+                daq_rel=daq_rel  # Keep track of the link for re-renders/downsampling
             )
+
         except Exception as error:
             flash(f'Failed to process file: {error}')
             return redirect(url_for('list_files'))

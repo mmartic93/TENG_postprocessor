@@ -94,7 +94,7 @@
                   {% if f.motor_error %}
                     <br/><em style="color: red;">{{ f.motor_error }}</em>
                   {% else %}
-                    <br/><a href="{{ url_for('view_file') }}?rel={{ f.motor_rel|urlencode }}&downsample={{ downsample_percent }}">View</a>
+                    <br/><a href="{{ url_for('view_file') }}?rel={{ f.motor_rel|urlencode }}&daq_rel={{ f.daq_rel|urlencode }}&gain={{ f.gain }}&downsample={{ downsample_percent }}">View</a>
                     {% if f.motor_ext == '.csv' %}
                       (CSV)
                     {% endif %}

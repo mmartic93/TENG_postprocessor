@@ -228,6 +228,53 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 
+# --- Multiple Y Axis plotting (V,Pos,F) ---
+def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=100, gain=None):
+    if not HAS_PLOTLY:
+        raise RuntimeError('plotly library is not installed')
+
+    # Apply gain to DAQ if available
+    if gain is not None:
+        daq_df = apply_gain_to_dataframe(daq_df, gain)
+
+    fig = go.Figure()
+
+    # 1. Add Voltage (Primary Y-axis)
+    daq_time = daq_df['Time(s)'] if 'Time(s)' in daq_df.columns else daq_df.index
+    voltage_col = 'Input 0' if 'Input 0' in daq_df.columns else daq_df.columns[0]
+    fig.add_trace(
+        go.Scatter(x=daq_time, y=daq_df[voltage_col], name="Voltage (V)", line=dict(color='blue'), yaxis="y1"))
+
+    # 2. Add Motor Data (Secondary/Tertiary Y-axes)
+    if motor_df is not None:
+        motor_time = motor_df['Time(s)'] if 'Time(s)' in motor_df.columns else motor_df.index
+
+        if 'Position' in motor_df.columns:
+            fig.add_trace(go.Scatter(x=motor_time, y=motor_df['Position'], name="Position", line=dict(color='orange'),
+                                     yaxis="y2"))
+
+        if 'Force' in motor_df.columns:
+            fig.add_trace(
+                go.Scatter(x=motor_time, y=motor_df['Force'], name="Force (N)", line=dict(color='green'), yaxis="y3"))
+
+    # Configure Axes Layout
+    fig.update_layout(
+        title=title,
+        xaxis=dict(title="Time (s)"),
+        yaxis=dict(title="Voltage (V)", titlefont=dict(color="blue"), tickfont=dict(color="blue")),
+        yaxis2=dict(
+            title="Position", anchor="free", overlaying="y", side="right",
+            position=1, titlefont=dict(color="orange"), tickfont=dict(color="orange")
+        ),
+        yaxis3=dict(
+            title="Force (N)", anchor="free", overlaying="y", side="right",
+            position=0.85, titlefont=dict(color="green"), tickfont=dict(color="green")
+        ),
+        height=700,
+        template="plotly_white"
+    )
+    return fig.to_html(include_plotlyjs='cdn', div_id='combined_plot')
+
 def create_mean_power_vs_req_plot(grouped_data: dict, title: str = 'Mean Power vs Resistance') -> str:
     if not HAS_PLOTLY or not grouped_data:
         return '<p>No data available</p>'
