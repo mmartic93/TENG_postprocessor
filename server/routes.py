@@ -291,9 +291,20 @@ def register_routes(app):
             if daq_rel:
                 try:
                     daq_abs = resolve_relative_path(meta_dir, daq_rel)
+                    print(f"DEBUG: Attempting combined plot. DAQ Path: {daq_abs}")  # Check console
+
+                    if not file_exists(daq_abs):
+                        print("DEBUG: DAQ file does not exist at path")
+
                     _, daq_ext = os.path.splitext(daq_abs)
+                    daq_ext = daq_ext.lower()
                     # Load the voltage file
-                    daq_df = csv_to_dataframe(daq_abs) if daq_ext == '.csv' else tdms_to_dataframe(daq_abs)
+                    if daq_ext == '.csv':
+                        daq_df = csv_to_dataframe(daq_abs)
+                    elif daq_ext == '.tdms':
+                        daq_df = tdms_to_dataframe(daq_abs)
+                    else:
+                        raise ValueError(f"Unsupported DAQ extension: {daq_ext}")
 
                     # Import and use a new combined plotting function
                     from data_processing.preview_service import create_combined_motor_daq_plot
