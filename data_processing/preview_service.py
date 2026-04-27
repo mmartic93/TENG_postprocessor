@@ -296,7 +296,7 @@ def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=1
         ),
         height=700, template="plotly_white", hovermode="x unified"
     )
-    return fig.to_html(include_plotlyjs='cdn', div_id='combined_plot')
+    return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 def create_mean_power_vs_req_plot(grouped_data: dict, title: str = 'Mean Power vs Resistance') -> str:
     if not HAS_PLOTLY or not grouped_data:
