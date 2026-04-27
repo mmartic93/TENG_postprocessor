@@ -106,7 +106,7 @@ def register_routes(app):
 
         metadata_path = session.get('metadata_path')
         selected_tribuid = session.get('selected_tribuid')
-        downsample_percent = int(request.args.get('downsample', 80))
+        downsample_percent = int(request.args.get('downsample', 100))
 
         if not metadata_path:
             flash('Upload a metadata CSV first')
