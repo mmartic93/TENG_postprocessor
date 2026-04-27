@@ -171,7 +171,7 @@ def calculate_mean_vpp_from_file(path: str, ext: str, gain: float) -> float:
 
 # --- PLOTTING ---
 
-def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_percent: int = 100, gain: float = None,
+def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_percent: int = 80, gain: float = None,
                      plot_mode: str = 'voltage', req: float = None) -> str:
     if not HAS_PLOTLY:
         raise RuntimeError('plotly library is not installed')
@@ -281,21 +281,40 @@ def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=1
         fig.add_trace(go.Scatter(x=m_time, y=motor_df[f_col], name="Force (N)",
                                  line=dict(color='green'), yaxis="y3"))
 
-    # 5. Configure Triple Y-Axes Layout
-    fig.update_layout(
-        title=title,
-        xaxis=dict(title="Time (s)", domain=[0, 0.85]),  # Shrink X to fit 3rd axis
-        yaxis=dict(title="Voltage (V)", titlefont=dict(color="blue"), tickfont=dict(color="blue")),
-        yaxis2=dict(
-            title="Position (mm)", anchor="x", overlaying="y", side="right",
-            titlefont=dict(color="orange"), tickfont=dict(color="orange")
-        ),
-        yaxis3=dict(
-            title="Force (N)", anchor="free", overlaying="y", side="right",
-            position=0.95, titlefont=dict(color="green"), tickfont=dict(color="green")
-        ),
-        height=700, template="plotly_white", hovermode="x unified"
-    )
+        # 5. Configure Triple Y-Axes Layout
+        fig.update_layout(
+            title=title,
+            xaxis=dict(title="Time (s)", domain=[0, 0.85]),  # Shrink X to fit 3rd axis
+
+            # Eje Y Principal (Voltaje)
+            yaxis=dict(
+                title=dict(text="Voltage (V)", font=dict(color="blue")),  # CAMBIO AQUÍ
+                tickfont=dict(color="blue")
+            ),
+
+            # Eje Y Secundario (Posición)
+            yaxis2=dict(
+                title=dict(text="Position (mm)", font=dict(color="orange")),  # CAMBIO AQUÍ
+                anchor="x",
+                overlaying="y",
+                side="right",
+                tickfont=dict(color="orange")
+            ),
+
+            # Eje Y Terciario (Fuerza)
+            yaxis3=dict(
+                title=dict(text="Force (N)", font=dict(color="green")),  # CAMBIO AQUÍ
+                anchor="free",
+                overlaying="y",
+                side="right",
+                position=0.95,
+                tickfont=dict(color="green")
+            ),
+
+            height=700,
+            template="plotly_white",
+            hovermode="x unified"
+        )
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 def create_mean_power_vs_req_plot(grouped_data: dict, title: str = 'Mean Power vs Resistance') -> str:

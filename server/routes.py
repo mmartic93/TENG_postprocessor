@@ -248,7 +248,7 @@ def register_routes(app):
         metadata_path = session.get('metadata_path')
         rel = request.args.get('rel')  # This is the primary file clicked (Motor)
         daq_rel = request.args.get('daq_rel')  # Passed from the template for combined view
-        downsample_percent = int(request.args.get('downsample', 100))
+        downsample_percent = int(request.args.get('downsample', 80))
 
         if not metadata_path or not rel:
             flash('Missing parameters')
