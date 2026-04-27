@@ -65,9 +65,10 @@ def tdms_to_dataframe(path: str) -> pd.DataFrame:
     data = target_channel[:]
     # FIX: Calculate actual time in seconds using the channel properties
     # Defaulting to 1000Hz (0.001s) if sampling information is missing
-    dt = target_channel.properties.get('wf_increment', 0.001)
+    dt = target_channel.properties.get('wf_increment', 0.005)
+    length = target_channel.properties.get('wf_samples', 272999)
     # Creamos el tiempo
-    time_s = np.linspace(0, len(data) * dt, len(data))
+    time_s = np.linspace(0, length * dt, length)
     df = pd.DataFrame({'Input 0': data, 'Time(s)': time_s})
 
     return df
