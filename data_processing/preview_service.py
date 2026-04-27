@@ -65,12 +65,15 @@ def tdms_to_dataframe(path: str) -> pd.DataFrame:
     data = target_channel[:]
     # FIX: Calculate actual time in seconds using the channel properties
     # Defaulting to 1000Hz (0.001s) if sampling information is missing
-    dt = target_channel.properties.get('wf_increment', 0.005)
-    length = target_channel.properties.get('wf_samples', 272999)
+    dt = target_channel.properties.get('wf_increment')
+    if dt is None:
+        # Si no existe wf_increment, buscamos sampling_rate
+        fs = target_channel.properties.get('sampling_rate', 1000.0)  # 1000Hz por defecto
+        dt = 1.0 / fs
+    length = len(data)
     # Creamos el tiempo
-    time_s = np.linspace(0, length * dt, length)
+    time_s = np.arange(length) * dt
     df = pd.DataFrame({'Input 0': data, 'Time(s)': time_s})
-
     return df
 
 
@@ -97,7 +100,11 @@ def calculate_power_dataframe(df: pd.DataFrame, req: float) -> pd.DataFrame:
 
     primary = plot_columns[0]
     power_series = df[primary].astype(float) ** 2 / req
-    return pd.DataFrame({'Power': power_series})
+    # MANTENER EL TIEMPO SI EXISTE
+    new_df = pd.DataFrame({'Power': power_series})
+    if 'Time(s)' in df.columns:
+        new_df['Time(s)'] = df['Time(s)'].values
+    return new_df
 
 
 # --- CENTRALIZED DETECTION LOGIC ---
@@ -234,7 +241,9 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
         fig.add_hline(y=vpp_info['mean_min'], line_dash="dash", line_color="red")
         title += f' | Mean Vpp: {vpp_info["vpp"]:.3f}V'
 
-    fig.update_layout(title=title, xaxis_title='Time/Index', yaxis_title=plot_mode.capitalize(), height=600)
+    # Usar el nombre de la columna si existe, de lo contrario poner 'Index'
+    x_label = time_col if time_col else 'Index'
+    fig.update_layout(title=title, xaxis_title=x_label, yaxis_title=plot_mode.capitalize(), height=600)
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 
