@@ -118,15 +118,15 @@ def get_signal_peaks(y_raw: np.ndarray):
         return None, None, 0.0, 0.0, 0.0
 
     # 1. Uniform Smoothing
-    y_smooth = apply_lowpass_filter(y_raw, cutoff=1) #cutoff=1 no filter. cutoff=0 filters all
+    y_smooth = apply_lowpass_filter(y_raw, cutoff=0.1) #cutoff=1 no filter. cutoff=0 filters all
     std_val = np.std(y_smooth)
 
     # 2. Unified Parameters (Sigma-based thresholding + Minimum distance)
     # distance=300 helps avoid multiple detections in noisy wave cycles
     params = {
-        'height': std_val * 0.8,
-        'prominence': std_val * 1.2,
-        'distance': 300
+        'height': np.percentile(y_smooth, 95),  # Focus on the top 5% of signal values
+        'prominence': np.std(y_smooth) * 2,  # Higher multiplier ignores noise
+        'distance': 100  # Prevent 'double-counting' a single spike
     }
 
     peaks_idx, _ = find_peaks(y_smooth, **params)
@@ -256,8 +256,6 @@ def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=1
     if gain is not None:
         daq_df = apply_gain_to_dataframe(daq_df, gain)
 
-    fig = go.Figure()
-
     # --- Helper to find columns by partial name ---
     def find_col(df, keywords):
         for col in df.columns:
@@ -279,55 +277,52 @@ def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=1
         duration = d_time.max() if len(d_time) > 0 else 1
         m_time = np.linspace(0, duration, len(motor_df))
 
-    # 2. Add Voltage (Primary Y-axis)
+    # 2. Crear Subplots: 3 filas, 1 columna
+    fig = make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.07,
+        subplot_titles=("Voltage (V)", "Position (mm)", "Force (N)")
+    )
+
+    # 3. Añadir Voltaje (Fila 1)
     if v_col:
-        fig.add_trace(go.Scatter(x=d_time, y=daq_df[v_col], name="Voltage (V)",
-                                 line=dict(color='blue'), yaxis="y1"))
-
-    # 3. Add Position (Secondary Y-axis)
-    if p_col:
-        fig.add_trace(go.Scatter(x=m_time, y=motor_df[p_col], name="Position (mm)",
-                                 line=dict(color='orange'), yaxis="y2"))
-
-    # 4. Add Force (Tertiary Y-axis)
-    if f_col:
-        fig.add_trace(go.Scatter(x=m_time, y=motor_df[f_col], name="Force (N)",
-                                 line=dict(color='green'), yaxis="y3"))
-
-        # 5. Configure Triple Y-Axes Layout
-        fig.update_layout(
-            title=title,
-            xaxis=dict(title="Time (s)", domain=[0, 0.85]),  # Shrink X to fit 3rd axis
-
-            # Eje Y Principal (Voltaje)
-            yaxis=dict(
-                title=dict(text="Voltage (V)", font=dict(color="blue")),  # CAMBIO AQUÍ
-                tickfont=dict(color="blue")
-            ),
-
-            # Eje Y Secundario (Posición)
-            yaxis2=dict(
-                title=dict(text="Position (mm)", font=dict(color="orange")),  # CAMBIO AQUÍ
-                anchor="x",
-                overlaying="y",
-                side="right",
-                tickfont=dict(color="orange")
-            ),
-
-            # Eje Y Terciario (Fuerza)
-            yaxis3=dict(
-                title=dict(text="Force (N)", font=dict(color="green")),  # CAMBIO AQUÍ
-                anchor="free",
-                overlaying="y",
-                side="right",
-                position=0.95,
-                tickfont=dict(color="green")
-            ),
-
-            height=700,
-            template="plotly_white",
-            hovermode="x unified"
+        fig.add_trace(
+            go.Scatter(x=d_time, y=daq_df[v_col], name="Voltage", line=dict(color='blue')),
+            row=1, col=1
         )
+
+    # 4. Añadir Posición (Fila 2)
+    if p_col:
+        fig.add_trace(
+            go.Scatter(x=m_time, y=motor_df[p_col], name="Position", line=dict(color='orange')),
+            row=2, col=1
+        )
+
+    # 5. Añadir Fuerza (Fila 3)
+    if f_col:
+        fig.add_trace(
+            go.Scatter(x=m_time, y=motor_df[f_col], name="Force", line=dict(color='green')),
+            row=3, col=1
+        )
+
+    # 6. Configuración de Layout
+    fig.update_layout(
+        title=title,
+        height=900,  # Aumentamos la altura para que los 3 se vean bien
+        template="plotly_white",
+        showlegend=False,
+        hovermode="x unified"
+    )
+
+    # Etiquetas de ejes Y individuales
+    fig.update_yaxes(title_text="V", row=1, col=1)
+    fig.update_yaxes(title_text="mm", row=2, col=1)
+    fig.update_yaxes(title_text="N", row=3, col=1)
+
+    # Etiqueta de eje X solo al final
+    fig.update_xaxes(title_text="Time (s)", row=3, col=1)
+
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 def create_mean_power_vs_req_plot(grouped_data: dict, title: str = 'Mean Power vs Resistance') -> str:
