@@ -213,14 +213,34 @@ def register_routes(app):
                 if entry.get('mean_vpp') is not None:
                     grouped_vpp_data[t_id].append((req_val, entry['mean_vpp']))
 
+        # --- NEW LOGIC: Calculate Optimal Points ---
+        optimal_points = []
+        for t_id, points in grouped_power_data.items():
+            if points:
+                # Find the tuple (req, power) with the highest power (index 1)
+                best_point = max(points, key=lambda x: x[1])
+                optimal_points.append({
+                    'tribu_id': t_id,
+                    'req': best_point[0],
+                    'max_power': best_point[1]
+                })
+
         # Pass the dictionaries to the plots
         mean_power_plot = None
+        optimal_power_plot = None
         mean_vpp_plot = None
+
         try:
             if grouped_power_data:
                 mean_power_plot = create_mean_power_vs_req_plot(
                     grouped_power_data,
                     f'Mean Power vs Resistance ({selected_tribuid})'
+                )
+                # Create the new optimal comparison plot
+                from data_processing.preview_service import create_optimal_power_plot
+                optimal_power_plot = create_optimal_power_plot(
+                    optimal_points,
+                    "Optimal Power Comparison across TribuIds"
                 )
             if grouped_vpp_data:
                 from data_processing.preview_service import create_mean_vpp_vs_req_plot
@@ -240,6 +260,7 @@ def register_routes(app):
             downsample_percent=downsample_percent,
             loads_description_error=loads_description_error,
             mean_power_plot=mean_power_plot,
+            optimal_power_plot=optimal_power_plot,
             mean_vpp_plot=mean_vpp_plot,
         )
 

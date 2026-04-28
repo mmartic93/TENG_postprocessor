@@ -118,6 +118,16 @@
       </div>
     {% endif %}
 
+    {% if optimal_power_plot %}
+      <div class="plot-container" style="margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
+        <h3 style="text-align: center; color: #2c3e50;">TribuId Performance Benchmarking</h3>
+        {{ optimal_power_plot | safe }}
+        <p style="font-size: 0.9em; color: #666; text-align: center;">
+            This chart identifies the maximum power achieved for each TribuId and the resistance (Req) at which it occurred.
+        </p>
+      </div>
+    {% endif %}
+
     {% if mean_vpp_plot %}
       <div class="plot-container" style="margin-top: -20px;"> {{ mean_vpp_plot | safe }}
       </div>

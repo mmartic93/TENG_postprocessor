@@ -351,6 +351,44 @@ def create_mean_vpp_vs_req_plot(grouped_data: dict, title: str = 'Mean Vpp vs Re
     return fig.to_html(include_plotlyjs='cdn', div_id='mean_vpp_plot')
 
 
+def create_optimal_power_plot(optimal_points: list, title: str = 'Optimal Power per TribuId') -> str:
+    """
+    Creates a bar chart comparing the maximum mean power achieved by each TribuId.
+    'optimal_points' should be a list of dicts: [{'tribu_id': id, 'req': value, 'max_power': value}, ...]
+    """
+    if not HAS_PLOTLY or not optimal_points:
+        return ''
+
+    # Sort by tribu_id for consistent display
+    optimal_points.sort(key=lambda x: str(x['tribu_id']))
+
+    tribu_ids = [str(p['tribu_id']) for p in optimal_points]
+    max_powers = [p['max_power'] for p in optimal_points]
+    req_labels = [f"Req: {p['req']} Ω" for p in optimal_points]
+
+    fig = go.Figure(data=[
+        go.Bar(
+            x=tribu_ids,
+            y=max_powers,
+            text=req_labels,
+            textposition='auto',
+            marker=dict(color='royalblue'),
+            hovertemplate="<b>TribuId: %{x}</b><br>Max Power: %{y:.4g} W<br>%{text}<extra></extra>"
+        )
+    ])
+
+    fig.update_layout(
+        title=title,
+        xaxis_title='TribuId',
+        yaxis_title='Max Mean Power [W]',
+        height=450,
+        template="plotly_white",
+        margin=dict(t=50, b=50, l=50, r=50)
+    )
+
+    return fig.to_html(include_plotlyjs='cdn', div_id='optimal_power_plot')
+
+
 def has_tdms_support() -> bool: return HAS_NPTDMS
 
 
