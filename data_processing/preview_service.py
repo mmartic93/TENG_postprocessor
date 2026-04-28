@@ -126,7 +126,7 @@ def get_signal_peaks(y_raw: np.ndarray):
     params = {
         'height': std_val * 0.5,
         'prominence': std_val * 1.2,
-        'distance': 300
+        'distance': 500
     }
 
     peaks_idx, _ = find_peaks(y_smooth, **params)
