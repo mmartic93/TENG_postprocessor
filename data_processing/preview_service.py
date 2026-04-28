@@ -118,13 +118,13 @@ def get_signal_peaks(y_raw: np.ndarray):
         return None, None, 0.0, 0.0, 0.0
 
     # 1. Uniform Smoothing
-    y_smooth = apply_lowpass_filter(y_raw, cutoff=1) #cutoff =1 is applying no filter
+    y_smooth = apply_lowpass_filter(y_raw, cutoff=1) #cutoff=1 no filter. cutoff=0 filters all
     std_val = np.std(y_smooth)
 
     # 2. Unified Parameters (Sigma-based thresholding + Minimum distance)
     # distance=300 helps avoid multiple detections in noisy wave cycles
     params = {
-        'height': std_val * 0.5,
+        'height': std_val * 0.2,
         'prominence': std_val * 1.2,
         'distance': 500
     }
