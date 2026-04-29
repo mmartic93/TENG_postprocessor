@@ -1,0 +1,33 @@
+[
+    {
+        "NAME": "Dev1",
+        "SAMPLE_RATE": 10000,
+        "DAQ_CHANNELS": {
+            "Voltage": {
+                "port": "Dev1/ai3",
+                "port_config": 0,
+                "conversion_factor": null
+            }
+        },
+        "TRIGGER_SOURCE": null,
+        "TYPE": "analog"
+    },
+    {
+        "NAME": "Dev2",
+        "SAMPLE_RATE": 10000,
+        "DAQ_CHANNELS": {
+            "LinMot_Enable": {
+                "port": "Dev2/port0/line0",
+                "port_config": null,
+                "conversion_factor": null
+            },
+            "LinMot_Up_Down": {
+                "port": "Dev2/port0/line1",
+                "port_config": null,
+                "conversion_factor": null
+            }
+        },
+        "TRIGGER_SOURCE": null,
+        "TYPE": "digital"
+    }
+]

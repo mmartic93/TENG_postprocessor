@@ -21,6 +21,7 @@ from data_processing.preview_service import (
     tdms_to_dataframe,
     create_plot_html,
     calculate_mean_power_from_file,
+    calculate_peak_power_from_file,
     create_mean_power_vs_req_plot,
     has_tdms_support,
     has_plotly_support,
@@ -33,19 +34,19 @@ def register_routes(app):
     def index():
         if request.method == 'POST':
             metadata_path = request.form.get('metadata_path', '').strip()
-            
+
             if not metadata_path:
                 flash('Please provide a metadata file path')
                 return redirect(request.url)
-            
+
             if not os.path.exists(metadata_path):
                 flash('Metadata file not found at specified path')
                 return redirect(request.url)
-            
+
             if not allowed_meta(metadata_path):
                 flash('Unsupported metadata file type (use .csv or .ods)')
                 return redirect(request.url)
-            
+
             try:
                 df = parse_metadata_csv(metadata_path)
                 if not validate_metadata_columns(df):
@@ -54,11 +55,11 @@ def register_routes(app):
             except Exception as error:
                 flash(f'Failed to parse metadata: {error}')
                 return redirect(request.url)
-            
+
             session['metadata_path'] = metadata_path
             session.pop('selected_tribuid', None)
             return redirect(url_for('metadata_preview'))
-        
+
         return render_template('index.html')
 
     @app.route('/metadata', methods=['GET', 'POST'])
@@ -103,7 +104,6 @@ def register_routes(app):
 
     @app.route('/files')
     def list_files():
-
         metadata_path = session.get('metadata_path')
         selected_tribuid = session.get('selected_tribuid')
         downsample_percent = int(request.args.get('downsample', 100))
@@ -136,7 +136,8 @@ def register_routes(app):
 
         file_entries = []
         for pair in file_pairs:
-            entry = {'exp_id': pair['exp_id'], 'rload_id': pair.get('rload_id', ''),'tribu_id': pair.get('tribu_id', '')}
+            entry = {'exp_id': pair['exp_id'], 'rload_id': pair.get('rload_id', ''),
+                     'tribu_id': pair.get('tribu_id', '')}
             if loads_info_df is not None:
                 load_info = lookup_load_info(loads_info_df, pair.get('rload_id', ''))
                 entry['req'] = load_info['Req']
@@ -148,7 +149,7 @@ def register_routes(app):
                 entry['rload_missing'] = False
             if loads_description_error:
                 entry['loads_description_error'] = loads_description_error
-            
+
             # Process DAQ file
             if pair['daq']:
                 try:
@@ -163,14 +164,22 @@ def register_routes(app):
 
                         if entry.get('req') and entry.get('gain'):
                             try:
+                                # Calculate Mean Power
                                 entry['mean_power'] = calculate_mean_power_from_file(
                                     daq_path,
                                     entry['daq_ext'],
                                     float(entry['gain']),
                                     float(entry['req']),
                                 )
-                                from data_processing.preview_service import \
-                                    calculate_mean_vpp_from_file  # Asegúrate de crearla
+                                # Calculate Peak Power
+                                entry['peak_power'] = calculate_peak_power_from_file(
+                                    daq_path,
+                                    entry['daq_ext'],
+                                    float(entry['gain']),
+                                    float(entry['req']),
+                                )
+                                # Calculate VPP
+                                from data_processing.preview_service import calculate_mean_vpp_from_file
                                 entry['mean_vpp'] = calculate_mean_vpp_from_file(
                                     daq_path,
                                     entry['daq_ext'],
@@ -178,10 +187,11 @@ def register_routes(app):
                                 )
                             except Exception:
                                 entry['mean_power'] = None
-                                entry['mean_vpp'] = None  # Fallback
+                                entry['peak_power'] = None
+                                entry['mean_vpp'] = None
                 except Exception as error:
                     entry['daq_error'] = str(error)
-            
+
             # Process Motor file
             if pair['motor']:
                 try:
@@ -201,6 +211,7 @@ def register_routes(app):
         from collections import defaultdict
 
         grouped_power_data = defaultdict(list)
+        grouped_peak_power_data = defaultdict(list)
         grouped_vpp_data = defaultdict(list)
 
         for entry in file_entries:
@@ -210,14 +221,16 @@ def register_routes(app):
                 req_val = float(req)
                 if entry.get('mean_power') is not None:
                     grouped_power_data[t_id].append((req_val, entry['mean_power']))
+                if entry.get('peak_power') is not None:
+                    grouped_peak_power_data[t_id].append((req_val, entry['peak_power']))
                 if entry.get('mean_vpp') is not None:
                     grouped_vpp_data[t_id].append((req_val, entry['mean_vpp']))
 
-        # --- NEW LOGIC: Calculate Optimal Points ---
+        # Calculate Optimal Points
         optimal_points = []
         for t_id, points in grouped_power_data.items():
             if points:
-                # Find the tuple (req, power) with the highest power (index 1)
+                # Find the tuple (req, power) with the highest power
                 best_point = max(points, key=lambda x: x[1])
                 optimal_points.append({
                     'tribu_id': t_id,
@@ -225,18 +238,18 @@ def register_routes(app):
                     'max_power': best_point[1]
                 })
 
-        # Pass the dictionaries to the plots
         mean_power_plot = None
         optimal_power_plot = None
         mean_vpp_plot = None
 
         try:
             if grouped_power_data:
+                # Pass both mean power and peak power to the plot
                 mean_power_plot = create_mean_power_vs_req_plot(
                     grouped_power_data,
-                    f'Mean Power vs Resistance ({selected_tribuid})'
+                    grouped_peak_power_data,
+                    f'Power Analysis vs Resistance ({selected_tribuid})'
                 )
-                # Create the new optimal comparison plot
                 from data_processing.preview_service import create_optimal_power_plot
                 optimal_power_plot = create_optimal_power_plot(
                     optimal_points,
@@ -278,7 +291,6 @@ def register_routes(app):
         meta_dir = os.path.dirname(metadata_path)
 
         try:
-            # Resolve path for the primary file
             target = resolve_relative_path(meta_dir, rel)
             if not file_exists(target):
                 flash(f'File not found: {target}')
@@ -287,7 +299,6 @@ def register_routes(app):
             _, ext = os.path.splitext(target)
             ext = ext.lower()
 
-            # Extract Gain and Req for processing
             gain_value = request.args.get('gain', '').strip()
             gain = float(gain_value) if gain_value else None
             req_value = request.args.get('req', '').strip()
@@ -295,7 +306,6 @@ def register_routes(app):
 
             plot_mode = request.args.get('plot_mode', 'voltage')
 
-            # 1. Load the Primary Dataframe (Motor)
             if ext == '.csv':
                 df = csv_to_dataframe(target)
             elif ext == '.tdms':
@@ -307,19 +317,12 @@ def register_routes(app):
                 flash(f'Unsupported file type: {ext}')
                 return redirect(url_for('list_files'))
 
-            # 2. Logic for Combined Plotting (Voltage + Motor)
-            # We check if daq_rel was provided (from the "View" button in the Motor column)
             if daq_rel:
                 try:
                     daq_abs = resolve_relative_path(meta_dir, daq_rel)
-                    print(f"DEBUG: Attempting combined plot. DAQ Path: {daq_abs}")  # Check console
-
-                    if not file_exists(daq_abs):
-                        print("DEBUG: DAQ file does not exist at path")
-
                     _, daq_ext = os.path.splitext(daq_abs)
                     daq_ext = daq_ext.lower()
-                    # Load the voltage file
+
                     if daq_ext == '.csv':
                         daq_df = csv_to_dataframe(daq_abs)
                     elif daq_ext == '.tdms':
@@ -327,7 +330,6 @@ def register_routes(app):
                     else:
                         raise ValueError(f"Unsupported DAQ extension: {daq_ext}")
 
-                    # Import and use a new combined plotting function
                     from data_processing.preview_service import create_combined_motor_daq_plot
                     plot_html = create_combined_motor_daq_plot(
                         daq_df=daq_df,
@@ -338,14 +340,11 @@ def register_routes(app):
                     )
                 except Exception as e:
                     flash(f"Could not load associated voltage file: {e}")
-                    # Fallback to standard plot if combined fails
                     plot_html = create_plot_html(df, f"Motor Data: {rel}", downsample_percent)
             else:
-                # Standard single-file plot (existing logic)
                 plot_html = create_plot_html(df, f"{ext.upper()} : {rel}", downsample_percent, gain=gain,
                                              plot_mode=plot_mode, req=req)
 
-            # Calculate mean power if in power mode
             mean_power = None
             if plot_mode == 'power' and gain is not None and req is not None:
                 mean_power = calculate_mean_power_from_file(target, ext, gain, req)
@@ -361,7 +360,7 @@ def register_routes(app):
                 plot_mode=plot_mode,
                 req_display=req_value,
                 mean_power=mean_power,
-                daq_rel=daq_rel  # Keep track of the link for re-renders/downsampling
+                daq_rel=daq_rel
             )
 
         except Exception as error:
