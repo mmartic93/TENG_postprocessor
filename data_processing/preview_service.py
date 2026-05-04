@@ -564,7 +564,7 @@ def create_no_ra_plot(df_voc: pd.DataFrame, df_isc: pd.DataFrame, title: str) ->
     else:
         full_title = title
 
-    fig.update_layout(height=800, title_text=title, showlegend=True, template="plotly_white")
+    fig.update_layout(height=800, title_text=full_title, showlegend=True, template="plotly_white")
     fig.update_xaxes(title_text="Time (s)", row=2, col=1)
 
     return fig.to_html(include_plotlyjs='cdn', div_id='no_ra_plot')
