@@ -3,7 +3,7 @@ import numpy as np
 from scipy.signal import butter, filtfilt
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
-
+from scipy.ndimage import label
 try:
     from nptdms import TdmsFile
 
@@ -104,17 +104,23 @@ def calculate_power_dataframe(df: pd.DataFrame, req: float) -> pd.DataFrame:
 
 # --- CENTRALIZED DETECTION LOGIC ---
 
-def get_signal_peaks(y_raw: np.ndarray):
-    """Shared logic for voltage peak detection."""
+def get_signal_peaks(y_raw: np.ndarray, custom_params: dict = None, cutoff: float = 0.1):
+    """Shared logic for voltage peak detection with optional custom tuning."""
     if not HAS_SCIPY:
         return None, None, 0.0, 0.0, 0.0
 
-    y_smooth = apply_lowpass_filter(y_raw, cutoff=0.1)
+    y_smooth = apply_lowpass_filter(y_raw, cutoff=cutoff)
+
+    # These are your ORIGINAL default parameters
     params = {
         'height': np.percentile(y_smooth, 95),
         'prominence': np.std(y_smooth) * 2,
         'distance': 100
     }
+
+    # If custom parameters are provided, override the defaults
+    if custom_params:
+        params.update(custom_params)
 
     peaks_idx, _ = find_peaks(y_smooth, **params)
     troughs_idx, _ = find_peaks(-y_smooth, **params)
@@ -148,6 +154,42 @@ def get_power_peaks(power_raw: np.ndarray):
 
     return None, 0.0
 
+
+def get_plateau_peaks(y_raw: np.ndarray, threshold_percentile=85, cutoff=0.05):
+    """Detects peaks in plateau-style signals by identifying segments of high voltage."""
+    if not HAS_SCIPY:
+        return None, None, 0.0, 0.0, 0.0
+
+    # 1. Heavy smoothing to define the 'blocks' of the plateau
+    y_smooth = apply_lowpass_filter(y_raw, cutoff=cutoff)
+
+    # 2. Identify the 'High' regions
+    y_min, y_max = np.min(y_smooth), np.max(y_smooth)
+    thresh = y_min + (y_max - y_min) * (threshold_percentile / 100.0)
+    is_high = y_smooth > thresh
+
+    # 3. Cluster contiguous 'High' points into distinct plateaus
+    labels, num_features = label(is_high)
+
+    peaks_idx = []
+    for i in range(1, num_features + 1):
+        # Get all indices belonging to this specific plateau
+        segment_indices = np.where(labels == i)[0]
+
+        # Ignore very short glitches (less than 20 samples)
+        if len(segment_indices) < 20:
+            continue
+
+        # Find the absolute maximum of the RAW data within this segment
+        best_idx = segment_indices[np.argmax(y_raw[segment_indices])]
+        peaks_idx.append(best_idx)
+
+    peaks_idx = np.array(peaks_idx)
+    if len(peaks_idx) > 0:
+        mean_max = np.mean(y_raw[peaks_idx])
+        return peaks_idx, None, mean_max, 0.0, 0.0
+
+    return None, None, 0.0, 0.0, 0.0
 
 # --- CALCULATION WRAPPERS ---
 
@@ -433,25 +475,85 @@ def create_no_ra_plot(df_voc: pd.DataFrame, df_isc: pd.DataFrame, title: str) ->
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         subplot_titles=("Open Circuit Voltage (V)", "Short Circuit Current (A)"))
 
-    # Process VOC File
+    # ==========================================
+    # 1. Process VOC File (Max Peaks Only)
+    # ==========================================
     time_voc = find_column(df_voc, ['time'])
     val_voc = find_column(df_voc, ['voltage', 'input 0', 'voc'])
 
     if val_voc:
-        x = df_voc[time_voc] if time_voc else np.arange(len(df_voc))
-        fig.add_trace(go.Scatter(x=x, y=df_voc[val_voc], name="Voc"), row=1, col=1)
+        # Extract data as numpy arrays for the scipy peak detector
+        x_voc = df_voc[time_voc].values if time_voc else np.arange(len(df_voc))
+        y_voc = df_voc[val_voc].values
+
+        # Use the new plateau-segment logic instead of find_peaks
+        p_idx_voc, _, m_max_voc, _, _ = get_plateau_peaks(
+            y_voc,
+            threshold_percentile=80,  # Adjust this to catch the 'shoulders'
+            cutoff=0.05  # Keep it low to ignore the noise on the top
+        )
+
+        fig.add_trace(go.Scatter(x=x_voc, y=y_voc, name="Voc"), row=1, col=1)
+
+        # If peaks are found, plot them and add the average line
+        if p_idx_voc is not None:
+            fig.add_trace(go.Scatter(
+                x=x_voc[p_idx_voc], y=y_voc[p_idx_voc], mode='markers',
+                name='Voc Max Peaks', marker=dict(color='green', size=8)
+            ), row=1, col=1)
+
+            fig.add_hline(y=m_max_voc, line_dash="dash", line_color="green",
+                          annotation_text=f"Mean Max: {m_max_voc:.3g}V", row=1, col=1)
+
         fig.update_yaxes(title_text="Voltage (V)", row=1, col=1)
 
-    # Process ISC File
+    # ==========================================
+    # 2. Process ISC File (Max and Min Peaks)
+    # ==========================================
     time_isc = find_column(df_isc, ['time'])
     val_isc = find_column(df_isc, ['current', 'isc', 'ampere'])
 
     if val_isc:
-        x = df_isc[time_isc] if time_isc else np.arange(len(df_isc))
-        fig.add_trace(go.Scatter(x=x, y=df_isc[val_isc], name="Isc", line=dict(color='red')), row=2, col=1)
+        # Extract data as numpy arrays
+        x_isc = df_isc[time_isc].values if time_isc else np.arange(len(df_isc))
+        y_isc = df_isc[val_isc].values
+
+        # Custom parameters for ISC (Sharp, narrow spikes)
+        isc_params = {
+            'distance': 20,  # Short distance since spikes are narrow
+            'prominence': np.std(y_isc) * 3,  # Higher prominence to ignore baseline noise
+            'height': None  # You can set this to a hard threshold like 0.5e-7 if needed
+        }
+        # Run peak detection (we want both peaks and troughs here)
+        p_idx_isc, t_idx_isc, m_max_isc, m_min_isc, vpp_isc = get_signal_peaks(y_isc, custom_params=isc_params, cutoff=0.3)
+
+        fig.add_trace(go.Scatter(x=x_isc, y=y_isc, name="Isc", line=dict(color='red')), row=2, col=1)
+
+        # If peaks are found, plot them and add the average lines
+        if p_idx_isc is not None and t_idx_isc is not None:
+            # Plot Max Peaks
+            fig.add_trace(go.Scatter(
+                x=x_isc[p_idx_isc], y=y_isc[p_idx_isc], mode='markers',
+                name='Isc Max', marker=dict(color='orange', size=6)
+            ), row=2, col=1)
+
+            # Plot Min Peaks
+            fig.add_trace(go.Scatter(
+                x=x_isc[t_idx_isc], y=y_isc[t_idx_isc], mode='markers',
+                name='Isc Min', marker=dict(color='purple', size=6)
+            ), row=2, col=1)
+
+            # Add Horizontal Average Lines
+            fig.add_hline(y=m_max_isc, line_dash="dot", line_color="orange", row=2, col=1)
+            fig.add_hline(y=m_min_isc, line_dash="dot", line_color="purple", row=2, col=1)
+
+            # Append the calculated Pk-Pk current to the main title
+            title += f" | Avg Isc Pk-Pk: {vpp_isc:.3g} A"
+
         fig.update_yaxes(title_text="Current (A)", row=2, col=1)
 
-    fig.update_layout(height=700, title_text=title, showlegend=True, template="plotly_white")
+    # Final Layout Adjustments
+    fig.update_layout(height=800, title_text=title, showlegend=True, template="plotly_white")
     fig.update_xaxes(title_text="Time (s)", row=2, col=1)
 
     return fig.to_html(include_plotlyjs='cdn', div_id='no_ra_plot')
