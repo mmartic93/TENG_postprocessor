@@ -461,113 +461,200 @@ def create_optimal_power_plot(optimal_points: list, title: str = 'Optimal Power 
     return fig.to_html(include_plotlyjs='cdn', div_id='optimal_power_plot')
 
 
-def create_no_ra_plot(df_voc: pd.DataFrame, df_isc: pd.DataFrame, title: str) -> str:
+def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> str:
+    """
+    voc_data_list: List of dicts [{'name': filename, 'df': dataframe}, ...]
+    isc_data_list: List of dicts [{'name': filename, 'df': dataframe}, ...]
+    """
     if not HAS_PLOTLY:
         return "<p>Plotly not installed</p>"
 
-    voc_summary = ""
-    isc_summary = ""
+    # 1. Calculate total number of plots needed
+    num_voc = len(voc_data_list)
+    num_isc = len(isc_data_list)
+    total_plots = num_voc + num_isc
 
-    # Helper to find the correct column even if there are extra spaces or case differences
+    if total_plots == 0:
+        return "<p>No data to plot</p>"
+
+    # 2. Generate dynamic subplot titles based on filenames
+    subplot_titles = []
+    for item in voc_data_list:
+        subplot_titles.append(f"Voc: {item['name']}")
+    for item in isc_data_list:
+        subplot_titles.append(f"Isc: {item['name']}")
+
+    # 3. Create dynamic rows
+    fig = make_subplots(
+        rows=total_plots,
+        cols=1,
+        shared_xaxes=False,  # Set to True if you want them all to zoom together on the X axis
+        subplot_titles=subplot_titles,
+        vertical_spacing=0.05  # Add some space between graphs
+    )
+
     def find_column(df, possible_names):
         for col in df.columns:
             if any(name.lower() in col.lower() for name in possible_names):
                 return col
         return None
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                        subplot_titles=("Open Circuit Voltage (V)", "Short Circuit Current (A)"))
+    all_voc_max = []
+    all_isc_vpp = []
+
+    # We use this counter to track which row we are plotting on
+    current_row = 1
 
     # ==========================================
-    # 1. Process VOC File (Max Peaks Only)
+    # Process Multiple VOC Files
     # ==========================================
-    time_voc = find_column(df_voc, ['time'])
-    val_voc = find_column(df_voc, ['voltage', 'input 0', 'voc'])
+    for item in voc_data_list:
+        df, name = item['df'], item['name']
+        time_col = find_column(df, ['time'])
+        val_col = find_column(df, ['voltage', 'input 0', 'voc'])
 
-    if val_voc:
-        # Extract data as numpy arrays for the scipy peak detector
-        x_voc = df_voc[time_voc].values if time_voc else np.arange(len(df_voc))
-        y_voc = df_voc[val_voc].values
+        if val_col:
+            x_vals = df[time_col].values if time_col else np.arange(len(df))
+            y_vals = df[val_col].values
 
-        # Use the new plateau-segment logic instead of find_peaks
-        p_idx_voc, _, m_max_voc, _, _ = get_plateau_peaks(
-            y_voc,
-            threshold_percentile=80,  # Adjust this to catch the 'shoulders'
-            cutoff=0.05  # Keep it low to ignore the noise on the top
-        )
+            # Plot the main voltage line for this file on its OWN row
+            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name=f"Voc: {name}"), row=current_row, col=1)
 
-        fig.add_trace(go.Scatter(x=x_voc, y=y_voc, name="Voc"), row=1, col=1)
+            p_idx, _, m_max, _, _ = get_plateau_peaks(y_vals, threshold_percentile=80, cutoff=0.05)
 
-        # If peaks are found, plot them and add the average line
-        if p_idx_voc is not None:
-            fig.add_trace(go.Scatter(
-                x=x_voc[p_idx_voc], y=y_voc[p_idx_voc], mode='markers',
-                name='Voc Max Peaks', marker=dict(color='green', size=8)
-            ), row=1, col=1)
+            if p_idx is not None:
+                all_voc_max.append(m_max)
+                # Plot the peak markers for this file
+                fig.add_trace(go.Scatter(
+                    x=x_vals[p_idx], y=y_vals[p_idx], mode='markers',
+                    name=f'Peaks ({name})', showlegend=False,
+                    marker=dict(size=8, symbol='circle-open')
+                ), row=current_row, col=1)
 
-            fig.add_hline(y=m_max_voc, line_dash="dash", line_color="green",
-                          annotation_text=f"Mean Max: {m_max_voc:.3g}V", row=1, col=1)
+            # Label the Y axis for this specific row
+            fig.update_yaxes(title_text="Voltage (V)", row=current_row, col=1)
 
-            voc_summary = f"Avg Voc Max: {m_max_voc:.3g} V"
-
-        fig.update_yaxes(title_text="Voltage (V)", row=1, col=1)
+        current_row += 1
 
     # ==========================================
-    # 2. Process ISC File (Max and Min Peaks)
+    # Process Multiple ISC Files
     # ==========================================
-    time_isc = find_column(df_isc, ['time'])
-    val_isc = find_column(df_isc, ['current', 'isc', 'ampere'])
+    for item in isc_data_list:
+        df, name = item['df'], item['name']
+        time_col = find_column(df, ['time'])
+        val_col = find_column(df, ['current', 'isc', 'ampere'])
 
-    if val_isc:
-        # Extract data as numpy arrays
-        x_isc = df_isc[time_isc].values if time_isc else np.arange(len(df_isc))
-        y_isc = df_isc[val_isc].values
+        if val_col:
+            x_vals = df[time_col].values if time_col else np.arange(len(df))
+            y_vals = df[val_col].values
 
-        # Custom parameters for ISC (Sharp, narrow spikes)
-        isc_params = {
-            'distance': 20,  # Short distance since spikes are narrow
-            'prominence': np.std(y_isc) * 3,  # Higher prominence to ignore baseline noise
-            'height': None  # You can set this to a hard threshold like 0.5e-7 if needed
-        }
-        # Run peak detection (we want both peaks and troughs here)
-        p_idx_isc, t_idx_isc, m_max_isc, m_min_isc, vpp_isc = get_signal_peaks(y_isc, custom_params=isc_params, cutoff=0.3)
+            # Plot the main current line for this file on its OWN row
+            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name=f"Isc: {name}"), row=current_row, col=1)
 
-        fig.add_trace(go.Scatter(x=x_isc, y=y_isc, name="Isc", line=dict(color='red')), row=2, col=1)
+            isc_params = {'distance': 20, 'prominence': np.std(y_vals) * 3}
+            p_idx, t_idx, m_max, m_min, vpp = get_signal_peaks(y_vals, custom_params=isc_params, cutoff=0.3)
 
-        # If peaks are found, plot them and add the average lines
-        if p_idx_isc is not None and t_idx_isc is not None:
-            # Plot Max Peaks
-            fig.add_trace(go.Scatter(
-                x=x_isc[p_idx_isc], y=y_isc[p_idx_isc], mode='markers',
-                name='Isc Max', marker=dict(color='orange', size=6)
-            ), row=2, col=1)
+            if p_idx is not None and t_idx is not None:
+                all_isc_vpp.append(vpp)
 
-            # Plot Min Peaks
-            fig.add_trace(go.Scatter(
-                x=x_isc[t_idx_isc], y=y_isc[t_idx_isc], mode='markers',
-                name='Isc Min', marker=dict(color='purple', size=6)
-            ), row=2, col=1)
+                # Plot Max Peaks
+                fig.add_trace(go.Scatter(
+                    x=x_vals[p_idx], y=y_vals[p_idx], mode='markers',
+                    name=f'Isc Max ({name})', showlegend=False,
+                    marker=dict(size=6, symbol='triangle-up')
+                ), row=current_row, col=1)
 
-            # Add Horizontal Average Lines
-            fig.add_hline(y=m_max_isc, line_dash="dot", line_color="orange", row=2, col=1)
-            fig.add_hline(y=m_min_isc, line_dash="dot", line_color="purple", row=2, col=1)
+                # Plot Min Peaks
+                fig.add_trace(go.Scatter(
+                    x=x_vals[t_idx], y=y_vals[t_idx], mode='markers',
+                    name=f'Isc Min ({name})', showlegend=False,
+                    marker=dict(size=6, symbol='triangle-down')
+                ), row=current_row, col=1)
 
-            # Append the calculated Pk-Pk current to the main title
-            isc_summary = f"Avg Isc Pk-Pk: {vpp_isc:.3g} A"
+            # Label the axes for this specific row
+            fig.update_yaxes(title_text="Current (A)", row=current_row, col=1)
+            fig.update_xaxes(title_text="Time (s)", row=current_row, col=1)
 
-        fig.update_yaxes(title_text="Current (A)", row=2, col=1)
+        current_row += 1
 
-        # Construct the final title string by joining the found summaries
+    # ==========================================
+    # Dynamic Title & Layout Calculation
+    # ==========================================
+    voc_summary = f"Avg Voc Max: {np.mean(all_voc_max):.3g} V" if all_voc_max else ""
+    isc_summary = f"Avg Isc Pk-Pk: {np.mean(all_isc_vpp):.3g} A" if all_isc_vpp else ""
+
     summaries = [s for s in [voc_summary, isc_summary] if s]
-    if summaries:
-        full_title = f"{title} | {' | '.join(summaries)}"
-    else:
-        full_title = title
+    full_title = f"{title} | {' | '.join(summaries)}" if summaries else title
 
-    fig.update_layout(height=800, title_text=full_title, showlegend=True, template="plotly_white")
-    fig.update_xaxes(title_text="Time (s)", row=2, col=1)
+    # Calculate height dynamically: Give each plot 350 pixels of vertical space
+    # (So 4 files = 1400px height, making it scrollable and easy to read)
+    dynamic_height = max(800, 350 * total_plots)
+
+    fig.update_layout(
+        height=dynamic_height,
+        title_text=full_title,
+        showlegend=True,
+        template="plotly_white"
+    )
 
     return fig.to_html(include_plotlyjs='cdn', div_id='no_ra_plot')
+
+def create_comparison_summary_plot(voc_results: list, isc_results: list) -> str:
+    """
+    Creates a bar plot comparing Voc and Isc metrics across filenames.
+    """
+    if not HAS_PLOTLY:
+        return ""
+
+    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # 1. Add Voc Mean Max (Blue Bars)
+    if voc_results:
+        voc_names = [item['name'] for item in voc_results]
+        voc_values = [item['max_v'] for item in voc_results]
+        fig.add_trace(
+            go.Bar(
+                x=voc_names,
+                y=voc_values,
+                name="Mean Max Voc (V)",
+                marker_color='rgba(0, 123, 255, 0.7)', # Blue
+                offsetgroup=1
+            ),
+            secondary_y=False,
+        )
+
+    # 2. Add Isc Pk-Pk (Red Bars)
+    if isc_results:
+        isc_names = [item['name'] for item in isc_results]
+        isc_values = [item['vpp_i'] for item in isc_results]
+        fig.add_trace(
+            go.Bar(
+                x=isc_names,
+                y=isc_values,
+                name="Avg Isc Pk-Pk (A)",
+                marker_color='rgba(255, 0, 0, 0.7)', # Red
+                offsetgroup=2
+            ),
+            secondary_y=True,
+        )
+
+    fig.update_layout(
+        title_text="Metric Comparison: Voc vs Isc",
+        xaxis_title="Filename",
+        template="plotly_white",
+        height=500,
+        # 'group' places bars side-by-side; 'overlay' would put them on top
+        barmode='group',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+
+    fig.update_yaxes(title_text="<b>Voltage</b> (V)", secondary_y=False, title_font=dict(color="blue"))
+    fig.update_yaxes(title_text="<b>Current</b> (A)", secondary_y=True, title_font=dict(color="red"))
+
+    return fig.to_html(include_plotlyjs='cdn', div_id='comparison_plot')
 
 def has_tdms_support() -> bool: return HAS_NPTDMS
 

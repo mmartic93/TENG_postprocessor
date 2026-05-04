@@ -368,56 +368,63 @@ def register_routes(app):
 
     @app.route('/no_ra', methods=['POST'])
     def no_ra_analysis():
-        print("Debug: No Ra Analysis route hit!")
-        voc_path = request.form.get('voc_path', '').strip()
-        isc_path = request.form.get('isc_path', '').strip()
+        # DEBUG PRINTS
+        voc_files = request.files.getlist('voc_files')
+        isc_files = request.files.getlist('isc_files')
+        print(f"DEBUG: Received {len(voc_files)} VOC files and {len(isc_files)} ISC files")
 
-        # Validate existence[cite: 1]
-        for p in [voc_path, isc_path]:
-            if not p or not os.path.exists(p):
-                print(f"Debug: File not found: {p}")
-                flash(f'File not found: {p}')
-                return redirect(url_for('index'))
-
-        session['voc_path'] = voc_path
-        session['isc_path'] = isc_path
-        return redirect(url_for('view_no_ra'))
-
-    @app.route('/no_ra_view')
-    def view_no_ra():
-        voc_path = session.get('voc_path')
-        isc_path = session.get('isc_path')
-
-        if not voc_path or not isc_path:
-            print(f"Debug Error: Session empty! VOC: {voc_path}, ISC: {isc_path}")
-            flash("Missing file paths for No Ra analysis.")
+        if not voc_files or not voc_files[0].filename:
+            print("DEBUG: VOC files list was empty or first file has no name")
+            flash("Please select at least one VOC file.")
             return redirect(url_for('index'))
 
         try:
-            # Reusing your existing CSV loader[cite: 3]
-            from data_processing.preview_service import csv_to_dataframe, create_no_ra_plot
+            import pandas as pd
+            import numpy as np  # Added to ensure np is available for prominence
+            from data_processing.preview_service import (
+                create_no_ra_plot,
+                get_plateau_peaks,
+                get_signal_peaks,
+                create_comparison_summary_plot
+            )
 
-            print(f"Debug: Attempting to load VOC: {voc_path}")
-            df_voc = csv_to_dataframe(voc_path)
-            print(f"Debug: Attempting to load ISC: {isc_path}")
-            df_isc = csv_to_dataframe(isc_path)
+            voc_data, isc_data = [], []
+            voc_summary_stats, isc_summary_stats = [], []
 
-            # Create a specialized plot comparing both
-            plot_html = create_no_ra_plot(df_voc, df_isc, "Open Circuit vs Short Circuit")
+            for f in voc_files:
+                if f.filename:
+                    df = pd.read_csv(f)
+                    voc_data.append({'name': f.filename, 'df': df})
+                    # Attempt to find the voltage column by name first, then by index
+                    y_vals = df.iloc[:, 1].values
+                    _, _, m_max, _, _ = get_plateau_peaks(y_vals)
+                    voc_summary_stats.append({'name': f.filename, 'max_v': m_max})
+
+            for f in isc_files:
+                if f.filename:
+                    df = pd.read_csv(f)
+                    isc_data.append({'name': f.filename, 'df': df})
+                    y_vals = df.iloc[:, 1].values
+                    # Ensure we use a safe prominence calculation
+                    prom = np.std(y_vals) * 3 if len(y_vals) > 0 else 1
+                    isc_params = {'distance': 20, 'prominence': prom}
+                    _, _, _, _, vpp = get_signal_peaks(y_vals, custom_params=isc_params)
+                    isc_summary_stats.append({'name': f.filename, 'vpp_i': vpp})
+
+            individual_plots_html = create_no_ra_plot(voc_data, isc_data, "Multi-File Analysis")
+            comparison_plot_html = create_comparison_summary_plot(voc_summary_stats, isc_summary_stats)
+            combined_html = comparison_plot_html + "<hr>" + individual_plots_html
 
             return render_template(
                 'plot_view.html',
-                plot=plot_html,
-                filename=f"VOC: {os.path.basename(voc_path)} | ISC: {os.path.basename(isc_path)}",
-                df_info=f"VOC: {len(df_voc)} rows, ISC: {len(df_isc)} rows",
+                plot=combined_html,
+                filename="No Ra Analysis Results",
+                df_info=f"{len(voc_files)} Voc, {len(isc_files)} Isc",
                 downsample_percent=100,
-                plot_mode='No Ra Analysis',
-                gain_display = None,  # Ensure these are defined so plot_view.html doesn't crash
-                req_display = None,
-                mean_power = None
+                plot_mode='No Ra Summary',
+                gain_display=None, req_display=None, mean_power=None
             )
         except Exception as e:
-            print(f"Debug Error: Logic crashed with: {str(e)}")
-            flash(f"Error in No Ra processing: {e}")
+            print(f"DEBUG ERROR: {str(e)}")  # This will print the exact error to your terminal
+            flash(f"Error processing files: {e}")
             return redirect(url_for('index'))
-
