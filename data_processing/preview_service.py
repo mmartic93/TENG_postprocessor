@@ -155,41 +155,40 @@ def get_power_peaks(power_raw: np.ndarray):
     return None, 0.0
 
 
-def get_plateau_peaks(y_raw: np.ndarray, threshold_percentile=85, cutoff=0.05):
-    """Detects peaks in plateau-style signals by identifying segments of high voltage."""
-    if not HAS_SCIPY:
-        return None, None, 0.0, 0.0, 0.0
+def get_plateau_peaks(y_vals, threshold_percentile=80, cutoff=0.05):
+    if len(y_vals) == 0:
+        return None, None, 0, 0, 0
 
-    # 1. Heavy smoothing to define the 'blocks' of the plateau
-    y_smooth = apply_lowpass_filter(y_raw, cutoff=cutoff)
+    # 1. Determine if the signal is primarily positive or negative
+    # We compare the max absolute value to the raw max to find polarity
+    raw_max = np.max(y_vals)
+    raw_min = np.min(y_vals)
 
-    # 2. Identify the 'High' regions
-    y_min, y_max = np.min(y_smooth), np.max(y_smooth)
-    thresh = y_min + (y_max - y_min) * (threshold_percentile / 100.0)
-    is_high = y_smooth > thresh
+    if abs(raw_min) > abs(raw_max):
+        # Negative plateau logic
+        threshold = np.percentile(y_vals, 100 - threshold_percentile)
+        plateau_indices = np.where(y_vals <= threshold)[0]
+    else:
+        # Positive plateau logic
+        threshold = np.percentile(y_vals, threshold_percentile)
+        plateau_indices = np.where(y_vals >= threshold)[0]
 
-    # 3. Cluster contiguous 'High' points into distinct plateaus
-    labels, num_features = label(is_high)
+    if len(plateau_indices) == 0:
+        return None, None, 0, 0, 0
 
-    peaks_idx = []
-    for i in range(1, num_features + 1):
-        # Get all indices belonging to this specific plateau
-        segment_indices = np.where(labels == i)[0]
+    # 2. Filter out values too close to zero (the baseline)
+    # This prevents the baseline from being detected as a plateau
+    abs_max = max(abs(raw_max), abs(raw_min))
+    significant_indices = [i for i in plateau_indices if abs(y_vals[i]) > (abs_max * cutoff)]
 
-        # Ignore very short glitches (less than 20 samples)
-        if len(segment_indices) < 20:
-            continue
+    if not significant_indices:
+        return None, None, 0, 0, 0
 
-        # Find the absolute maximum of the RAW data within this segment
-        best_idx = segment_indices[np.argmax(y_raw[segment_indices])]
-        peaks_idx.append(best_idx)
+    significant_indices = np.array(significant_indices)
+    mean_plateau_value = np.mean(y_vals[significant_indices])
 
-    peaks_idx = np.array(peaks_idx)
-    if len(peaks_idx) > 0:
-        mean_max = np.mean(y_raw[peaks_idx])
-        return peaks_idx, None, mean_max, 0.0, 0.0
-
-    return None, None, 0.0, 0.0, 0.0
+    # For Voc, we return the mean of the plateau as the "max"
+    return significant_indices, None, mean_plateau_value, 0, 0
 
 # --- CALCULATION WRAPPERS ---
 
@@ -580,7 +579,8 @@ def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> s
     # ==========================================
     # Dynamic Title & Layout Calculation
     # ==========================================
-    voc_summary = f"Avg Voc Max: {np.mean(all_voc_max):.3g} V" if all_voc_max else ""
+    # Change this line in create_no_ra_plot[cite: 10]:
+    voc_summary = f"Avg Voc Max: {np.mean(np.abs(all_voc_max)):.3g} V" if all_voc_max else ""
     isc_summary = f"Avg Isc Pk-Pk: {np.mean(all_isc_vpp):.3g} A" if all_isc_vpp else ""
 
     summaries = [s for s in [voc_summary, isc_summary] if s]

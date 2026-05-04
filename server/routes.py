@@ -398,7 +398,7 @@ def register_routes(app):
                     # Attempt to find the voltage column by name first, then by index
                     y_vals = df.iloc[:, 1].values
                     _, _, m_max, _, _ = get_plateau_peaks(y_vals)
-                    voc_summary_stats.append({'name': f.filename, 'max_v': m_max})
+                    voc_summary_stats.append({'name': f.filename, 'max_v': abs(m_max)})
 
             for f in isc_files:
                 if f.filename:
