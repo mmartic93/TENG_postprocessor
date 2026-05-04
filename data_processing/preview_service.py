@@ -465,6 +465,9 @@ def create_no_ra_plot(df_voc: pd.DataFrame, df_isc: pd.DataFrame, title: str) ->
     if not HAS_PLOTLY:
         return "<p>Plotly not installed</p>"
 
+    voc_summary = ""
+    isc_summary = ""
+
     # Helper to find the correct column even if there are extra spaces or case differences
     def find_column(df, possible_names):
         for col in df.columns:
@@ -504,6 +507,8 @@ def create_no_ra_plot(df_voc: pd.DataFrame, df_isc: pd.DataFrame, title: str) ->
 
             fig.add_hline(y=m_max_voc, line_dash="dash", line_color="green",
                           annotation_text=f"Mean Max: {m_max_voc:.3g}V", row=1, col=1)
+
+            voc_summary = f"Avg Voc Max: {m_max_voc:.3g} V"
 
         fig.update_yaxes(title_text="Voltage (V)", row=1, col=1)
 
@@ -548,11 +553,17 @@ def create_no_ra_plot(df_voc: pd.DataFrame, df_isc: pd.DataFrame, title: str) ->
             fig.add_hline(y=m_min_isc, line_dash="dot", line_color="purple", row=2, col=1)
 
             # Append the calculated Pk-Pk current to the main title
-            title += f" | Avg Isc Pk-Pk: {vpp_isc:.3g} A"
+            isc_summary = f"Avg Isc Pk-Pk: {vpp_isc:.3g} A"
 
         fig.update_yaxes(title_text="Current (A)", row=2, col=1)
 
-    # Final Layout Adjustments
+        # Construct the final title string by joining the found summaries
+    summaries = [s for s in [voc_summary, isc_summary] if s]
+    if summaries:
+        full_title = f"{title} | {' | '.join(summaries)}"
+    else:
+        full_title = title
+
     fig.update_layout(height=800, title_text=title, showlegend=True, template="plotly_white")
     fig.update_xaxes(title_text="Time (s)", row=2, col=1)
 
