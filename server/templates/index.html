@@ -6,6 +6,7 @@
   </head>
   <body>
     <h1>Load Metadata File</h1>
+    <!-- Preserve existing flash messages for error handling -->
     {% with messages = get_flashed_messages() %}
       {% if messages %}
         <ul>
@@ -23,5 +24,27 @@
     </form>
 
     <p><small>Required columns in metadata: ExpId, TribuId, DaqFile, MotorFile.</small></p>
+
+    <hr>
+
+    <!-- NEW NO RA ANALYSIS OPTION: Direct loading of VOC and ISC data -->
+    <h1>No Ra Analysis</h1>
+    <p>Use this option to process open circuit voltage and short circuit current without an RloadId.</p>
+
+    <form method="post" action="{{ url_for('no_ra_analysis') }}">
+      <div>
+        <label for="voc_path">Full path to Open Circuit Voltage (CSV):</label><br/>
+        <input id="voc_path" name="voc_path" type="text" size="100" placeholder="e.g., C:\Path\To\Voc_Data.csv" required />
+      </div>
+      <br>
+      <div>
+        <label for="isc_path">Full path to Short Circuit Current (CSV):</label><br/>
+        <input id="isc_path" name="isc_path" type="text" size="100" placeholder="e.g., C:\Path\To\Isc_Data.csv" required />
+      </div>
+      <br>
+      <button type="submit" style="background-color: #007bff; color: white; padding: 5px 15px; border: none; border-radius: 3px; cursor: pointer;">
+        Run No Ra Analysis
+      </button>
+    </form>
   </body>
 </html>

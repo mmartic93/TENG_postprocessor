@@ -419,6 +419,43 @@ def create_optimal_power_plot(optimal_points: list, title: str = 'Optimal Power 
     return fig.to_html(include_plotlyjs='cdn', div_id='optimal_power_plot')
 
 
+def create_no_ra_plot(df_voc: pd.DataFrame, df_isc: pd.DataFrame, title: str) -> str:
+    if not HAS_PLOTLY:
+        return "<p>Plotly not installed</p>"
+
+    # Helper to find the correct column even if there are extra spaces or case differences
+    def find_column(df, possible_names):
+        for col in df.columns:
+            if any(name.lower() in col.lower() for name in possible_names):
+                return col
+        return None
+
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        subplot_titles=("Open Circuit Voltage (V)", "Short Circuit Current (A)"))
+
+    # Process VOC File
+    time_voc = find_column(df_voc, ['time'])
+    val_voc = find_column(df_voc, ['voltage', 'input 0', 'voc'])
+
+    if val_voc:
+        x = df_voc[time_voc] if time_voc else np.arange(len(df_voc))
+        fig.add_trace(go.Scatter(x=x, y=df_voc[val_voc], name="Voc"), row=1, col=1)
+        fig.update_yaxes(title_text="Voltage (V)", row=1, col=1)
+
+    # Process ISC File
+    time_isc = find_column(df_isc, ['time'])
+    val_isc = find_column(df_isc, ['current', 'isc', 'ampere'])
+
+    if val_isc:
+        x = df_isc[time_isc] if time_isc else np.arange(len(df_isc))
+        fig.add_trace(go.Scatter(x=x, y=df_isc[val_isc], name="Isc", line=dict(color='red')), row=2, col=1)
+        fig.update_yaxes(title_text="Current (A)", row=2, col=1)
+
+    fig.update_layout(height=700, title_text=title, showlegend=True, template="plotly_white")
+    fig.update_xaxes(title_text="Time (s)", row=2, col=1)
+
+    return fig.to_html(include_plotlyjs='cdn', div_id='no_ra_plot')
+
 def has_tdms_support() -> bool: return HAS_NPTDMS
 
 

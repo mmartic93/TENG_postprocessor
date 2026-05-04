@@ -362,7 +362,62 @@ def register_routes(app):
                 mean_power=mean_power,
                 daq_rel=daq_rel
             )
-
         except Exception as error:
             flash(f'Failed to process file: {error}')
             return redirect(url_for('list_files'))
+
+    @app.route('/no_ra', methods=['POST'])
+    def no_ra_analysis():
+        print("Debug: No Ra Analysis route hit!")
+        voc_path = request.form.get('voc_path', '').strip()
+        isc_path = request.form.get('isc_path', '').strip()
+
+        # Validate existence[cite: 1]
+        for p in [voc_path, isc_path]:
+            if not p or not os.path.exists(p):
+                print(f"Debug: File not found: {p}")
+                flash(f'File not found: {p}')
+                return redirect(url_for('index'))
+
+        session['voc_path'] = voc_path
+        session['isc_path'] = isc_path
+        return redirect(url_for('view_no_ra'))
+
+    @app.route('/no_ra_view')
+    def view_no_ra():
+        voc_path = session.get('voc_path')
+        isc_path = session.get('isc_path')
+
+        if not voc_path or not isc_path:
+            print(f"Debug Error: Session empty! VOC: {voc_path}, ISC: {isc_path}")
+            flash("Missing file paths for No Ra analysis.")
+            return redirect(url_for('index'))
+
+        try:
+            # Reusing your existing CSV loader[cite: 3]
+            from data_processing.preview_service import csv_to_dataframe, create_no_ra_plot
+
+            print(f"Debug: Attempting to load VOC: {voc_path}")
+            df_voc = csv_to_dataframe(voc_path)
+            print(f"Debug: Attempting to load ISC: {isc_path}")
+            df_isc = csv_to_dataframe(isc_path)
+
+            # Create a specialized plot comparing both
+            plot_html = create_no_ra_plot(df_voc, df_isc, "Open Circuit vs Short Circuit")
+
+            return render_template(
+                'plot_view.html',
+                plot=plot_html,
+                filename=f"VOC: {os.path.basename(voc_path)} | ISC: {os.path.basename(isc_path)}",
+                df_info=f"VOC: {len(df_voc)} rows, ISC: {len(df_isc)} rows",
+                downsample_percent=100,
+                plot_mode='No Ra Analysis',
+                gain_display = None,  # Ensure these are defined so plot_view.html doesn't crash
+                req_display = None,
+                mean_power = None
+            )
+        except Exception as e:
+            print(f"Debug Error: Logic crashed with: {str(e)}")
+            flash(f"Error in No Ra processing: {e}")
+            return redirect(url_for('index'))
+
