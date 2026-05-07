@@ -539,35 +539,13 @@ def create_optimal_power_plot(optimal_points: list, title: str = 'Optimal Power 
 
 def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> str:
     """
-    voc_data_list: List of dicts [{'name': filename, 'df': dataframe}, ...]
-    isc_data_list: List of dicts [{'name': filename, 'df': dataframe}, ...]
+    Generates independent graphs for each Voc and Isc file.
+    Each graph includes its own time axis, file-specific title, and metrics.
     """
     if not HAS_PLOTLY:
         return "<p>Plotly not installed</p>"
 
-    # 1. Calculate total number of plots needed
-    num_voc = len(voc_data_list)
-    num_isc = len(isc_data_list)
-    total_plots = num_voc + num_isc
-
-    if total_plots == 0:
-        return "<p>No data to plot</p>"
-
-    # 2. Generate dynamic subplot titles based on filenames
-    subplot_titles = []
-    for item in voc_data_list:
-        subplot_titles.append(f"Voc: {item['name']}")
-    for item in isc_data_list:
-        subplot_titles.append(f"Isc: {item['name']}")
-
-    # 3. Create dynamic rows
-    fig = make_subplots(
-        rows=total_plots,
-        cols=1,
-        shared_xaxes=False,  # Set to True if you want them all to zoom together on the X axis
-        subplot_titles=subplot_titles,
-        vertical_spacing=0.05  # Add some space between graphs
-    )
+    html_plots = []
 
     def find_column(df, possible_names):
         for col in df.columns:
@@ -575,14 +553,8 @@ def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> s
                 return col
         return None
 
-    all_voc_max = []
-    all_isc_vpp = []
-
-    # We use this counter to track which row we are plotting on
-    current_row = 1
-
     # ==========================================
-    # Process Multiple VOC Files
+    # Process Multiple VOC Files Independently
     # ==========================================
     for item in voc_data_list:
         df, name = item['df'], item['name']
@@ -593,27 +565,40 @@ def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> s
             x_vals = df[time_col].values if time_col else np.arange(len(df))
             y_vals = df[val_col].values
 
-            # Plot the main voltage line for this file on its OWN row
-            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name=f"Voc: {name}"), row=current_row, col=1)
-
+            # Calculate metrics for this specific file
             p_idx, _, m_max, _, _ = get_plateau_peaks(y_vals, threshold_percentile=80, cutoff=0.05)
 
+            # Create a dedicated figure for this file
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name=f"Voltage", line=dict(color='#007bff')))
+
             if p_idx is not None:
-                all_voc_max.append(m_max)
-                # Plot the peak markers for this file
                 fig.add_trace(go.Scatter(
                     x=x_vals[p_idx], y=y_vals[p_idx], mode='markers',
-                    name=f'Peaks ({name})', showlegend=False,
-                    marker=dict(size=8, symbol='circle-open')
-                ), row=current_row, col=1)
+                    name='Detected Peaks',
+                    marker=dict(size=8, symbol='circle-open', color='black')
+                ))
 
-            # Label the Y axis for this specific row
-            fig.update_yaxes(title_text="Voc (V)", row=current_row, col=1)
+            # Build the specific title for this graph
+            file_title = f"<b>Voc Analysis:</b> {name}"
+            if p_idx is not None:
+                file_title += f" | <b>Avg Max:</b> {abs(m_max):.3g} V"
 
-        current_row += 1
+            fig.update_layout(
+                title=file_title,
+                xaxis_title="Time (s)",
+                yaxis_title="Voc (V)",
+                template="plotly_white",
+                height=450,
+                margin=dict(t=50, b=50),
+                showlegend=True
+            )
+
+            # Append HTML. include_plotlyjs=False avoids reloading the library for every graph
+            html_plots.append(fig.to_html(include_plotlyjs=False, full_html=False))
 
     # ==========================================
-    # Process Multiple ISC Files
+    # Process Multiple ISC Files Independently
     # ==========================================
     for item in isc_data_list:
         df, name = item['df'], item['name']
@@ -624,57 +609,46 @@ def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> s
             x_vals = df[time_col].values if time_col else np.arange(len(df))
             y_vals = df[val_col].values
 
-            # Plot the main current line for this file on its OWN row
-            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name=f"Isc: {name}"), row=current_row, col=1)
-
+            # Calculate metrics for this specific file
             isc_params = {'distance': 20, 'prominence': np.std(y_vals) * 3}
             p_idx, t_idx, m_max, m_min, vpp = get_signal_peaks(y_vals, custom_params=isc_params, cutoff=0.3)
 
-            if p_idx is not None and t_idx is not None:
-                all_isc_vpp.append(vpp)
+            # Create a dedicated figure for this file
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name=f"Current", line=dict(color='#dc3545')))
 
-                # Plot Max Peaks
+            if p_idx is not None and t_idx is not None:
                 fig.add_trace(go.Scatter(
                     x=x_vals[p_idx], y=y_vals[p_idx], mode='markers',
-                    name=f'Isc Max ({name})', showlegend=False,
-                    marker=dict(size=6, symbol='triangle-up')
-                ), row=current_row, col=1)
-
-                # Plot Min Peaks
+                    name='Max Peaks', marker=dict(size=6, symbol='triangle-up', color='black')
+                ))
                 fig.add_trace(go.Scatter(
                     x=x_vals[t_idx], y=y_vals[t_idx], mode='markers',
-                    name=f'Isc Min ({name})', showlegend=False,
-                    marker=dict(size=6, symbol='triangle-down')
-                ), row=current_row, col=1)
+                    name='Min Peaks', marker=dict(size=6, symbol='triangle-down', color='gray')
+                ))
 
-            # Label the axes for this specific row
-            fig.update_yaxes(title_text="Isc (A)", row=current_row, col=1)
-            fig.update_xaxes(title_text="Time (s)", row=current_row, col=1)
+            # Build the specific title for this graph
+            file_title = f"<b>Isc Analysis:</b> {name}"
+            if p_idx is not None:
+                file_title += f" | <b>Avg Pk-Pk:</b> {vpp:.3g} A"
 
-        current_row += 1
+            fig.update_layout(
+                title=file_title,
+                xaxis_title="Time (s)",
+                yaxis_title="Isc (A)",
+                template="plotly_white",
+                height=450,
+                margin=dict(t=50, b=50),
+                showlegend=True
+            )
 
-    # ==========================================
-    # Dynamic Title & Layout Calculation
-    # ==========================================
-    # Change this line in create_no_ra_plot[cite: 10]:
-    voc_summary = f"Avg Voc Max: {np.mean(np.abs(all_voc_max)):.3g} V" if all_voc_max else ""
-    isc_summary = f"Avg Isc Pk-Pk: {np.mean(all_isc_vpp):.3g} A" if all_isc_vpp else ""
+            html_plots.append(fig.to_html(include_plotlyjs=False, full_html=False))
 
-    summaries = [s for s in [voc_summary, isc_summary] if s]
-    full_title = f"{title} | {' | '.join(summaries)}" if summaries else title
+    if not html_plots:
+        return "<p>No data to plot</p>"
 
-    # Calculate height dynamically: Give each plot 350 pixels of vertical space
-    # (So 4 files = 1400px height, making it scrollable and easy to read)
-    dynamic_height = max(800, 350 * total_plots)
-
-    fig.update_layout(
-        height=dynamic_height,
-        title_text=full_title,
-        showlegend=True,
-        template="plotly_white"
-    )
-
-    return fig.to_html(include_plotlyjs='cdn', div_id='no_ra_plot')
+    # Join all separate divs with a horizontal rule for clear separation
+    return "<hr>".join(html_plots)
 
 def create_comparison_summary_plot(voc_results: list, isc_results: list) -> str:
     """
