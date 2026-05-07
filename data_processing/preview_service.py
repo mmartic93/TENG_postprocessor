@@ -540,7 +540,7 @@ def create_optimal_power_plot(optimal_points: list, title: str = 'Optimal Power 
 def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> str:
     """
     Generates independent graphs for each Voc and Isc file.
-    Each graph includes its own time axis, file-specific title, and metrics.
+    Includes averaged metrics in the titles and horizontal reference lines.
     """
     if not HAS_PLOTLY:
         return "<p>Plotly not installed</p>"
@@ -565,36 +565,41 @@ def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> s
             x_vals = df[time_col].values if time_col else np.arange(len(df))
             y_vals = df[val_col].values
 
-            # Calculate metrics for this specific file
             p_idx, _, m_max, _, _ = get_plateau_peaks(y_vals, threshold_percentile=80, cutoff=0.05)
 
-            # Create a dedicated figure for this file
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name=f"Voltage", line=dict(color='#007bff')))
+            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name="Voltage", line=dict(color='#007bff')))
+
+            # Define the title with the averaged value
+            avg_voc_val = abs(m_max)
+            file_title = f"<b>Voc Analysis:</b> {name} | <b>Avg Max:</b> {avg_voc_val:.3g} V"
 
             if p_idx is not None:
+                # Add markers for plateau
                 fig.add_trace(go.Scatter(
                     x=x_vals[p_idx], y=y_vals[p_idx], mode='markers',
-                    name='Detected Peaks',
-                    marker=dict(size=8, symbol='circle-open', color='black')
+                    name='Plateau Points',
+                    marker=dict(size=4, symbol='circle', color='rgba(0,0,0,0.3)')
                 ))
 
-            # Build the specific title for this graph
-            file_title = f"<b>Voc Analysis:</b> {name}"
-            if p_idx is not None:
-                file_title += f" | <b>Avg Max:</b> {abs(m_max):.3g} V"
+                # Add Horizontal Average Line
+                fig.add_hline(
+                    y=m_max,
+                    line_dash="dash",
+                    line_color="green",
+                    annotation_text=f"Avg: {avg_voc_val:.3g}V",
+                    annotation_position="top left"
+                )
 
             fig.update_layout(
                 title=file_title,
                 xaxis_title="Time (s)",
-                yaxis_title="Voc (V)",
+                yaxis_title="Voltage (V)",
                 template="plotly_white",
                 height=450,
                 margin=dict(t=50, b=50),
                 showlegend=True
             )
-
-            # Append HTML. include_plotlyjs=False avoids reloading the library for every graph
             html_plots.append(fig.to_html(include_plotlyjs=False, full_html=False))
 
     # ==========================================
@@ -609,45 +614,49 @@ def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> s
             x_vals = df[time_col].values if time_col else np.arange(len(df))
             y_vals = df[val_col].values
 
-            # Calculate metrics for this specific file
             isc_params = {'distance': 20, 'prominence': np.std(y_vals) * 3}
             p_idx, t_idx, m_max, m_min, vpp = get_signal_peaks(y_vals, custom_params=isc_params, cutoff=0.3)
 
-            # Create a dedicated figure for this file
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name=f"Current", line=dict(color='#dc3545')))
+            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name="Current", line=dict(color='#dc3545')))
+
+            # Define the title with the Pk-Pk value
+            file_title = f"<b>Isc Analysis:</b> {name} | <b>Avg Pk-Pk:</b> {vpp:.3g} A"
 
             if p_idx is not None and t_idx is not None:
                 fig.add_trace(go.Scatter(
                     x=x_vals[p_idx], y=y_vals[p_idx], mode='markers',
-                    name='Max Peaks', marker=dict(size=6, symbol='triangle-up', color='black')
+                    name='Max Peaks', marker=dict(size=6, symbol='triangle-up', color='green')
                 ))
                 fig.add_trace(go.Scatter(
                     x=x_vals[t_idx], y=y_vals[t_idx], mode='markers',
-                    name='Min Peaks', marker=dict(size=6, symbol='triangle-down', color='gray')
+                    name='Min Peaks', marker=dict(size=6, symbol='triangle-down', color='red')
                 ))
 
-            # Build the specific title for this graph
-            file_title = f"<b>Isc Analysis:</b> {name}"
-            if p_idx is not None:
-                file_title += f" | <b>Avg Pk-Pk:</b> {vpp:.3g} A"
+                # Add Horizontal Lines for Max and Min Averages
+                fig.add_hline(
+                    y=m_max, line_dash="dash", line_color="green",
+                    annotation_text=f"Max: {m_max:.3g}A", annotation_position="top right"
+                )
+                fig.add_hline(
+                    y=m_min, line_dash="dash", line_color="red",
+                    annotation_text=f"Min: {m_min:.3g}A", annotation_position="bottom right"
+                )
 
             fig.update_layout(
                 title=file_title,
                 xaxis_title="Time (s)",
-                yaxis_title="Isc (A)",
+                yaxis_title="Current (A)",
                 template="plotly_white",
                 height=450,
                 margin=dict(t=50, b=50),
                 showlegend=True
             )
-
             html_plots.append(fig.to_html(include_plotlyjs=False, full_html=False))
 
     if not html_plots:
         return "<p>No data to plot</p>"
 
-    # Join all separate divs with a horizontal rule for clear separation
     return "<hr>".join(html_plots)
 
 def create_comparison_summary_plot(voc_results: list, isc_results: list) -> str:
