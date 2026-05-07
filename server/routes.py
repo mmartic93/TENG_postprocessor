@@ -238,29 +238,41 @@ def register_routes(app):
                     'max_power': best_point[1]
                 })
 
-        mean_power_plot = None
+        mean_power_plots = []
         optimal_power_plot = None
         mean_vpp_plot = None
 
         try:
             if grouped_power_data:
                 # Pass both mean power and peak power to the plot
-                mean_power_plot = create_mean_power_vs_req_plot(
-                    grouped_power_data,
-                    grouped_peak_power_data,
-                    f'Power Analysis vs Resistance ({selected_tribuid})'
-                )
+                for t_id in grouped_power_data.keys():
+                    # Extract only the data for THIS specific TribuId
+                    single_tribu_mean = {t_id: grouped_power_data[t_id]}
+                    single_tribu_peak = {t_id: grouped_peak_power_data.get(t_id, [])}
+                    # Create the individual plot
+                    p_plot = create_mean_power_vs_req_plot(
+                        single_tribu_mean,
+                        single_tribu_peak,
+                        f'Power Analysis vs Resistance: {t_id}',
+                        div_id=f'power_plot_{t_id}'
+                    )
+                    mean_power_plots.append(p_plot)
+
+                    # The "Benchmarking" plot remains a single comparison graph
                 from data_processing.preview_service import create_optimal_power_plot
                 optimal_power_plot = create_optimal_power_plot(
                     optimal_points,
                     "Optimal Power Comparison across TribuIds"
                 )
             if grouped_vpp_data:
+                # Keep this as a SINGLE graph (passing all data)
                 from data_processing.preview_service import create_mean_vpp_vs_req_plot
                 mean_vpp_plot = create_mean_vpp_vs_req_plot(
                     grouped_vpp_data,
                     f'Mean Vpp vs Resistance ({selected_tribuid})'
                 )
+
+
         except Exception as e:
             print(f"Error generando gráficas: {e}")
 
@@ -272,7 +284,7 @@ def register_routes(app):
             file_count=len(sample),
             downsample_percent=downsample_percent,
             loads_description_error=loads_description_error,
-            mean_power_plot=mean_power_plot,
+            mean_power_plots=mean_power_plots,
             optimal_power_plot=optimal_power_plot,
             mean_vpp_plot=mean_vpp_plot,
         )

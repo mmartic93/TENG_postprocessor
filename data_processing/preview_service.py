@@ -381,11 +381,15 @@ def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=1
 
 
 def create_mean_power_vs_req_plot(grouped_power: dict, grouped_peak_power: dict = None,
-                                  title: str = 'Power Analysis vs Resistance') -> str:
+                                  title: str = 'Power Analysis vs Resistance',
+                                  div_id: str = 'mean_power_plots') -> str:
     if not HAS_PLOTLY or not grouped_power:
         return '<p>No data available</p>'
 
-    # Creating subplot with secondary y-axis
+    # Define explicit colors for clarity
+    mean_color = '#1f77b4'  # Professional Blue
+    peak_color = '#d62728'  # Professional Red
+
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     for tribu_id, points in grouped_power.items():
@@ -393,22 +397,51 @@ def create_mean_power_vs_req_plot(grouped_power: dict, grouped_peak_power: dict 
         points.sort(key=lambda x: x[0])
         reqs, powers = zip(*points)
 
-        # Primary axis (Mean Power) - Solid Line
-        fig.add_trace(go.Scatter(x=reqs, y=powers, mode='markers+lines', name=f'{tribu_id} (Mean)'), secondary_y=False)
+        # Primary axis (Mean Power) - Solid Blue Line
+        fig.add_trace(
+            go.Scatter(
+                x=reqs, y=powers,
+                mode='markers+lines',
+                name=f'{tribu_id} (Mean)',
+                line=dict(color=mean_color)
+            ),
+            secondary_y=False
+        )
 
-        # Secondary axis (Peak Power) - Dashed Line
+        # Secondary axis (Peak Power) - Dashed Red Line
         if grouped_peak_power and tribu_id in grouped_peak_power:
             peak_points = grouped_peak_power[tribu_id]
             peak_points.sort(key=lambda x: x[0])
             p_reqs, p_peaks = zip(*peak_points)
-            fig.add_trace(go.Scatter(x=p_reqs, y=p_peaks, mode='markers+lines', line=dict(dash='dash'),
-                                     name=f'{tribu_id} (Peak)'), secondary_y=True)
+            fig.add_trace(
+                go.Scatter(
+                    x=p_reqs, y=p_peaks,
+                    mode='markers+lines',
+                    line=dict(dash='dash', color=peak_color),
+                    name=f'{tribu_id} (Peak)'
+                ),
+                secondary_y=True
+            )
 
     fig.update_layout(title=title, xaxis_title='Resistance (Req) [ohms]', height=500)
-    fig.update_yaxes(title_text="Mean Power [W]", secondary_y=False)
-    fig.update_yaxes(title_text="Avg Peak Power (Last 10 cycles) [W]", secondary_y=True)
 
-    return fig.to_html(include_plotlyjs='cdn', div_id='mean_power_plot')
+    # Match Left Y-Axis to Mean Power color
+    fig.update_yaxes(
+        title_text="<b>Mean Power [W]</b>",
+        title_font=dict(color=mean_color),
+        tickfont=dict(color=mean_color),
+        secondary_y=False
+    )
+
+    # Match Right Y-Axis to Peak Power color
+    fig.update_yaxes(
+        title_text="<b>Avg Peak Power (Last 10 cycles) [W]</b>",
+        title_font=dict(color=peak_color),
+        tickfont=dict(color=peak_color),
+        secondary_y=True
+    )
+
+    return fig.to_html(include_plotlyjs='cdn', div_id=div_id)
 
 
 def create_mean_vpp_vs_req_plot(grouped_data: dict, title: str = 'Mean Vpp vs Resistance') -> str:
