@@ -608,7 +608,7 @@ def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> s
                 ), row=current_row, col=1)
 
             # Label the Y axis for this specific row
-            fig.update_yaxes(title_text="Voltage (V)", row=current_row, col=1)
+            fig.update_yaxes(title_text="Voc (V)", row=current_row, col=1)
 
         current_row += 1
 
@@ -648,7 +648,7 @@ def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> s
                 ), row=current_row, col=1)
 
             # Label the axes for this specific row
-            fig.update_yaxes(title_text="Current (A)", row=current_row, col=1)
+            fig.update_yaxes(title_text="Isc (A)", row=current_row, col=1)
             fig.update_xaxes(title_text="Time (s)", row=current_row, col=1)
 
         current_row += 1
@@ -728,8 +728,8 @@ def create_comparison_summary_plot(voc_results: list, isc_results: list) -> str:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
-    fig.update_yaxes(title_text="<b>Voltage</b> (V)", secondary_y=False, title_font=dict(color="blue"))
-    fig.update_yaxes(title_text="<b>Current</b> (A)", secondary_y=True, title_font=dict(color="red"))
+    fig.update_yaxes(title_text="<b>Mean Max Voc</b> (V)", secondary_y=False, title_font=dict(color="blue"))
+    fig.update_yaxes(title_text="<b>Mean Pk-Pk Isc</b> (A)", secondary_y=True, title_font=dict(color="red"))
 
     return fig.to_html(include_plotlyjs='cdn', div_id='comparison_plot')
 
