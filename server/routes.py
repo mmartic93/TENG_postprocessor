@@ -226,17 +226,37 @@ def register_routes(app):
                 if entry.get('mean_vpp') is not None:
                     grouped_vpp_data[t_id].append((req_val, entry['mean_vpp']))
 
+        # --- REPLACING THE OPTIMAL POINTS CALCULATION IN routes.py ---
         # Calculate Optimal Points
         optimal_points = []
-        for t_id, points in grouped_power_data.items():
-            if points:
-                # Find the tuple (req, power) with the highest power
-                best_point = max(points, key=lambda x: x[1])
-                optimal_points.append({
-                    'tribu_id': t_id,
-                    'req': best_point[0],
-                    'max_power': best_point[1]
-                })
+        # Get a unique list of all TribuIds present in either dictionary
+        all_tribus = set(grouped_power_data.keys()).union(set(grouped_peak_power_data.keys()))
+
+        for t_id in all_tribus:
+            tribu_info = {'tribu_id': t_id}
+
+            # 1. Find the point with the maximum MEAN power
+            points_mean = grouped_power_data.get(t_id, [])
+            if points_mean:
+                best_mean = max(points_mean, key=lambda x: x[1])
+                tribu_info['req_mean'] = best_mean[0]
+                tribu_info['max_power'] = best_mean[1]  # Mean Power
+            else:
+                tribu_info['max_power'] = 0
+                tribu_info['req_mean'] = 'N/A'
+
+            # 2. Find the point with the maximum PEAK power
+            points_peak = grouped_peak_power_data.get(t_id, [])
+            if points_peak:
+                best_peak = max(points_peak, key=lambda x: x[1])
+                tribu_info['req_peak'] = best_peak[0]
+                tribu_info['max_peak_power'] = best_peak[1]  # Peak Power
+            else:
+                tribu_info['max_peak_power'] = 0
+                tribu_info['req_peak'] = 'N/A'
+
+            if points_mean or points_peak:
+                optimal_points.append(tribu_info)
 
         mean_power_plots = []
         optimal_power_plot = None

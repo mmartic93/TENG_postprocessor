@@ -460,34 +460,78 @@ def create_mean_vpp_vs_req_plot(grouped_data: dict, title: str = 'Mean Vpp vs Re
     return fig.to_html(include_plotlyjs='cdn', div_id='mean_vpp_plot')
 
 
-def create_optimal_power_plot(optimal_points: list, title: str = 'Optimal Power per TribuId') -> str:
-    """Creates a bar chart comparing the maximum mean power achieved by each TribuId."""
+def create_optimal_power_plot(optimal_points: list, title: str = 'Optimal Power Comparison across TribuIds') -> str:
     if not HAS_PLOTLY or not optimal_points:
         return ''
 
-    optimal_points.sort(key=lambda x: str(x['tribu_id']))
-    tribu_ids = [str(p['tribu_id']) for p in optimal_points]
-    max_powers = [p['max_power'] for p in optimal_points]
-    req_labels = [f"Req: {p['req']} Ω" for p in optimal_points]
+    from plotly.subplots import make_subplots
 
-    fig = go.Figure(data=[
+    # Sort alphabetically by TribuId
+    optimal_points.sort(key=lambda x: str(x['tribu_id']))
+
+    tribu_ids = [str(p['tribu_id']) for p in optimal_points]
+
+    # Extract Mean Power Data
+    max_means = [p.get('max_power', 0) for p in optimal_points]
+    req_mean_labels = [f"Req: {p.get('req_mean', 'N/A')} Ω" for p in optimal_points]
+
+    # Extract Peak Power Data
+    max_peaks = [p.get('max_peak_power', 0) for p in optimal_points]
+    req_peak_labels = [f"Req: {p.get('req_peak', 'N/A')} Ω" for p in optimal_points]
+
+    # Create figure with secondary Y-axis
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Trace 1: Max Mean Power (Blue Bars) - Primary Axis
+    fig.add_trace(
         go.Bar(
             x=tribu_ids,
-            y=max_powers,
-            text=req_labels,
+            y=max_means,
+            name='Max Mean Power',
+            text=req_mean_labels,
             textposition='auto',
-            marker=dict(color='royalblue'),
-            hovertemplate="<b>TribuId: %{x}</b><br>Max Power: %{y:.4g} W<br>%{text}<extra></extra>"
-        )
-    ])
+            marker=dict(color='#1f77b4'),  # Match the blue from the previous charts
+            hovertemplate="<b>%{x}</b><br>Max Mean: %{y:.4g} W<br>%{text}<extra></extra>",
+            offsetgroup=1
+        ),
+        secondary_y=False
+    )
+
+    # Trace 2: Max Peak Power (Red Markers/Line) - Secondary Axis
+    fig.add_trace(
+        go.Bar(
+            x=tribu_ids,
+            y=max_peaks,
+            name='Max Peak Power',
+            text=req_peak_labels,
+            marker=dict(color='#d62728'),  # Match the red from previous chart
+            hovertemplate="<b>%{x}</b><br>Max Peak: %{y:.4g} W<br>%{text}<extra></extra>",
+            offsetgroup=2
+        ),
+        secondary_y=True
+    )
 
     fig.update_layout(
         title=title,
         xaxis_title='TribuId',
-        yaxis_title='Max Mean Power [W]',
-        height=450,
+        height=500,
         template="plotly_white",
-        margin=dict(t=50, b=50, l=50, r=50)
+        margin=dict(t=50, b=50, l=50, r=50),
+        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1)  # Move legend to top
+    )
+
+    # Apply colors to the Y-axes to match the data
+    fig.update_yaxes(
+        title_text="<b>Max Mean Power [W]</b>",
+        title_font=dict(color='#1f77b4'),
+        tickfont=dict(color='#1f77b4'),
+        secondary_y=False
+    )
+    fig.update_yaxes(
+        title_text="<b>Max Peak Power [W]</b>",
+        title_font=dict(color='#d62728'),
+        tickfont=dict(color='#d62728'),
+        secondary_y=True
     )
 
     return fig.to_html(include_plotlyjs='cdn', div_id='optimal_power_plot')
