@@ -137,7 +137,11 @@ def register_routes(app):
         file_entries = []
         for pair in file_pairs:
             entry = {'exp_id': pair['exp_id'], 'rload_id': pair.get('rload_id', ''),
-                     'tribu_id': pair.get('tribu_id', '')}
+                     'tribu_id': pair.get('tribu_id', ''),'mean_power': None,
+                     'peak_power': None,
+                        'mean_vpp': None,
+                        'daq_rel': None,
+                        'motor_rel': None}
             if loads_info_df is not None:
                 load_info = lookup_load_info(loads_info_df, pair.get('rload_id', ''))
                 entry['req'] = load_info['Req']

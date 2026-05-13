@@ -64,7 +64,7 @@
               <td>{{ f.req or '—' }}</td>
               <td>{{ f.gain or '—' }}</td>
               <td>
-                {% if f.mean_power is not none %}
+                {% if f.mean_power is defined and f.mean_power is not none %}
                   {{ '%.4g' | format(f.mean_power) }}
                 {% else %}
                   —
