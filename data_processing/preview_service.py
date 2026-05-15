@@ -109,22 +109,30 @@ def get_signal_peaks(y_raw: np.ndarray, custom_params: dict = None, cutoff: floa
     if not HAS_SCIPY:
         return None, None, 0.0, 0.0, 0.0
 
+    # 1. CRITICAL: Extract cutoff from custom_params BEFORE filtering
+    if custom_params and custom_params.get('cutoff') is not None:
+        cutoff = float(custom_params['cutoff'])
+
     y_smooth = apply_lowpass_filter(y_raw, cutoff=cutoff)
 
-    # These are your ORIGINAL default parameters
+    # 2. Set dynamic defaults
     params = {
         'height': np.percentile(y_smooth, 95),
         'prominence': np.std(y_smooth) * 2,
         'distance': 100
     }
 
-    # If custom parameters are provided, override the defaults
+    # 3. Override with custom values (filtering out Nones)
     if custom_params:
-        params.update(custom_params)
-    search_params = {k: v for k, v in params.items() if k != 'cutoff'}
+        params.update({k: v for k, v in custom_params.items() if v is not None})
 
-    peaks_idx, _ = find_peaks(y_smooth, **search_params)
-    troughs_idx, _ = find_peaks(-y_smooth, **search_params)
+    # 4. Prepare separate params for Troughs to avoid the 'height' conflict
+    # We remove height for troughs unless specifically handled
+    search_params_peaks = {k: v for k, v in params.items() if k != 'cutoff'}
+    search_params_troughs = {k: v for k, v in search_params_peaks.items() if k != 'height'}
+
+    peaks_idx, _ = find_peaks(y_smooth, **search_params_peaks)
+    troughs_idx, _ = find_peaks(-y_smooth, **search_params_troughs)
 
     if len(peaks_idx) > 0 and len(troughs_idx) > 0:
         mean_max = np.mean(y_raw[peaks_idx])

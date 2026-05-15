@@ -340,7 +340,7 @@ def register_routes(app):
                 'cutoff': request.args.get('pk_cutoff', type=float, default=0.1)
             }
         except Exception:
-            peak_params = {}
+            peak_params = {'cutoff': 0.1}
 
         try:
             target = resolve_relative_path(meta_dir, rel)
