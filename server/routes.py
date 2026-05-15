@@ -317,14 +317,30 @@ def register_routes(app):
     def view_file():
         metadata_path = session.get('metadata_path')
         rel = request.args.get('rel')  # This is the primary file clicked (Motor)
+        if rel:
+            rel = rel.replace('//', '/').replace('\\\\', '\\')
         daq_rel = request.args.get('daq_rel')  # Passed from the template for combined view
+        if daq_rel:
+            daq_rel = daq_rel.replace('//', '/').replace('\\\\', '\\')
         downsample_percent = int(request.args.get('downsample', 80))
+
 
         if not metadata_path or not rel:
             flash('Missing parameters')
             return redirect(url_for('index'))
 
         meta_dir = os.path.dirname(metadata_path)
+
+        # --- CAPTURAR PARÁMETROS DE DETECCIÓN DE PICOS ---
+        try:
+            peak_params = {
+                'height': request.args.get('pk_height', type=float),
+                'prominence': request.args.get('pk_prom', type=float),
+                'distance': request.args.get('pk_dist', type=int),
+                'cutoff': request.args.get('pk_cutoff', type=float, default=0.1)
+            }
+        except Exception:
+            peak_params = {}
 
         try:
             target = resolve_relative_path(meta_dir, rel)
@@ -376,13 +392,15 @@ def register_routes(app):
                     )
                 except Exception as e:
                     flash(f"Could not load associated voltage file: {e}")
-                    plot_html = create_plot_html(df, f"Motor Data: {rel}", downsample_percent)
+                    plot_html = create_plot_html(df, f"Motor Data: {rel}", downsample_percent, peak_params=peak_params)
             else:
+                # PASAR peak_params A create_plot_html
                 plot_html = create_plot_html(df, f"{ext.upper()} : {rel}", downsample_percent, gain=gain,
-                                             plot_mode=plot_mode, req=req)
+                                             plot_mode=plot_mode, req=req, peak_params=peak_params)
 
             mean_power = None
             if plot_mode == 'power' and gain is not None and req is not None:
+                # Aquí también podrías pasar peak_params si calculate_mean_power_from_file lo requiere
                 mean_power = calculate_mean_power_from_file(target, ext, gain, req)
 
             df_info = f'{len(df)} rows × {len(df.columns)} columns'
@@ -396,9 +414,13 @@ def register_routes(app):
                 plot_mode=plot_mode,
                 req_display=req_value,
                 mean_power=mean_power,
-                daq_rel=daq_rel
+                daq_rel=daq_rel,
+                peak_params=peak_params  # PASAR A LA PLANTILLA
             )
         except Exception as error:
+            import traceback
+            print("ERROR DETECTADO EN VIEW_FILE:")
+            print(traceback.format_exc())  # Esto imprimirá el error real en tu terminal negra
             flash(f'Failed to process file: {error}')
             return redirect(url_for('list_files'))
 

@@ -2,58 +2,131 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Data Visualization</title>
+    <title>Data Visualization - {{ filename }}</title>
     <style>
-      body { font-family: Arial, sans-serif; margin: 20px; }
-      .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-      .header h1 { margin: 0; }
-      .info { background-color: #f0f0f0; padding: 10px; border-radius: 4px; margin-bottom: 20px; }
-      .navigation { margin-top: 20px; }
-      .navigation a { margin-right: 15px; }
+      body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; color: #333; }
+      .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+      .header h1 { margin: 0; font-size: 1.5rem; color: #0056b3; }
+      
+      .info { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #dee2e6; margin-bottom: 20px; }
+      .info p { margin: 5px 0; font-size: 0.9rem; }
+      
+      .filter-grid { 
+        display: grid; 
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); 
+        gap: 15px; 
+        margin-top: 15px; 
+        padding-top: 15px; 
+        border-top: 1px solid #dee2e6; 
+      }
+      
+      .filter-group { display: flex; flex-direction: column; }
+      .filter-group label { font-size: 0.8rem; font-weight: bold; margin-bottom: 5px; color: #555; }
+      .filter-group input, .filter-group select { 
+        padding: 6px; 
+        border: 1px solid #ccc; 
+        border-radius: 4px; 
+        font-size: 0.9rem; 
+      }
+      
+      .btn-update { 
+        background-color: #007bff; 
+        color: white; 
+        border: none; 
+        padding: 8px 15px; 
+        border-radius: 4px; 
+        cursor: pointer; 
+        font-weight: bold;
+        transition: background 0.2s;
+        align-self: flex-end;
+      }
+      .btn-update:hover { background-color: #0056b3; }
+      
+      .plot-container { border: 1px solid #eee; border-radius: 8px; overflow: hidden; }
+      .navigation { margin-top: 20px; padding-top: 10px; }
+      .navigation a { text-decoration: none; color: #007bff; font-weight: bold; }
     </style>
   </head>
   <body>
     <div class="header">
-      <h1>Data Visualization</h1>
-      <p><strong>{{ filename }}</strong></p>
+      <h1>Visualización de Datos</h1>
+      <p>Archivo: <strong>{{ filename }}</strong></p>
     </div>
 
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div style="color: red; margin-bottom: 15px;">
+          {% for msg in messages %} <p>{{ msg }}</p> {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
     <div class="info">
-      <p>Data shape: {{ df_info }}</p>
-      <p>Downsampling: {{ downsample_percent }}%</p>
-      {% if gain_display %}
-        <p>Gain applied: {{ gain_display }}</p>
-      {% endif %}
-      {% if req_display %}
-        <p>Req used: {{ req_display }}</p>
-      {% endif %}
-      {% if plot_mode %}
-        <p>Plot mode: <strong>{{ plot_mode }}</strong></p>
-      {% endif %}
-      {% if mean_power is not none %}
-        <p>Mean power: <strong>{{ '%.4g' | format(mean_power) }} W</strong></p>
-      {% endif %}
-      <form method="get" action="{{ url_for('view_file') }}" style="display: inline; margin-top: 10px;">
+      <div style="display: flex; gap: 40px;">
+        <div>
+          <p><strong>Info base:</strong> {{ df_info }}</p>
+          {% if gain_display %}<p><strong>Gain:</strong> {{ gain_display }}</p>{% endif %}
+          {% if req_display %}<p><strong>Req:</strong> {{ req_display }} &Omega;</p>{% endif %}
+        </div>
+        <div>
+          {% if mean_power is not none %}
+            <p><strong>Mean Peak Power:</strong> <span style="color: #d9534f; font-size: 1.1rem;">{{ '%.4g' | format(mean_power) }} W</span></p>
+          {% endif %}
+          <p><strong>Modo:</strong> {{ plot_mode | capitalize }}</p>
+        </div>
+      </div>
+
+      <form method="get" action="{{ url_for('view_file') }}">
         <input type="hidden" name="rel" value="{{ filename }}" />
         <input type="hidden" name="gain" value="{{ gain_display }}" />
         <input type="hidden" name="req" value="{{ req_display }}" />
-        <label for="plot_mode">Plot mode:</label>
-        <select id="plot_mode" name="plot_mode" onchange="this.form.submit()">
-          <option value="voltage" {% if plot_mode == 'voltage' %}selected{% endif %}>Voltage</option>
-          <option value="power" {% if plot_mode == 'power' %}selected{% endif %}>Power</option>
-        </select>
-        <label for="downsample">Downsample:</label>
-        <input type="number" id="downsample" name="downsample" min="1" max="100" value="{{ downsample_percent }}" style="width: 60px;" />
-        <input type="submit" value="Update Plot" />
+        <input type="hidden" name="daq_rel" value="{{ daq_rel or '' }}" />
+
+        <div class="filter-grid">
+          <div class="filter-group">
+            <label for="plot_mode">Visualización</label>
+            <select id="plot_mode" name="plot_mode">
+              <option value="voltage" {% if plot_mode == 'voltage' %}selected{% endif %}>Voltaje (V)</option>
+              <option value="power" {% if plot_mode == 'power' %}selected{% endif %}>Potencia (W)</option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label for="downsample">Downsample (%)</label>
+            <input type="number" id="downsample" name="downsample" min="1" max="100" value="{{ downsample_percent }}">
+          </div>
+
+          <div class="filter-group">
+            <label title="Altura mínima del pico">Pk Height</label>
+            <input type="number" step="any" name="pk_height" placeholder="Auto" value="{{ peak_params.height if peak_params.height is not none else '' }}">
+          </div>
+
+          <div class="filter-group">
+            <label title="Prominencia mínima">Pk Prominence</label>
+            <input type="number" step="any" name="pk_prom" placeholder="Auto" value="{{ peak_params.prominence if peak_params.prominence is not none else '' }}">
+          </div>
+
+          <div class="filter-group">
+            <label title="Distancia mínima entre picos (muestras)">Pk Distance</label>
+            <input type="number" name="pk_dist" placeholder="50" value="{{ peak_params.distance if peak_params.distance is not none else '' }}">
+          </div>
+
+          <div class="filter-group">
+            <label title="Filtro pasa-bajas (0.01 a 0.99)">Cutoff Filter</label>
+            <input type="number" step="0.01" min="0.01" max="0.99" name="pk_cutoff" value="{{ peak_params.cutoff or 0.1 }}">
+          </div>
+
+          <button type="submit" class="btn-update">Actualizar Gráfica</button>
+        </div>
       </form>
     </div>
 
-    <div id="plot">
+    <div class="plot-container">
       {{ plot | safe }}
     </div>
 
     <div class="navigation">
-      <p><a href="{{ url_for('list_files') }}">← Back to file list</a></p>
+      <a href="{{ url_for('list_files', downsample=downsample_percent) }}">&larr; Volver a la lista</a>
     </div>
   </body>
 </html>

@@ -121,9 +121,10 @@ def get_signal_peaks(y_raw: np.ndarray, custom_params: dict = None, cutoff: floa
     # If custom parameters are provided, override the defaults
     if custom_params:
         params.update(custom_params)
+    search_params = {k: v for k, v in params.items() if k != 'cutoff'}
 
-    peaks_idx, _ = find_peaks(y_smooth, **params)
-    troughs_idx, _ = find_peaks(-y_smooth, **params)
+    peaks_idx, _ = find_peaks(y_smooth, **search_params)
+    troughs_idx, _ = find_peaks(-y_smooth, **search_params)
 
     if len(peaks_idx) > 0 and len(troughs_idx) > 0:
         mean_max = np.mean(y_raw[peaks_idx])
@@ -133,21 +134,30 @@ def get_signal_peaks(y_raw: np.ndarray, custom_params: dict = None, cutoff: floa
     return None, None, 0.0, 0.0, 0.0
 
 
-def get_power_peaks(power_raw: np.ndarray):
-    """Detect peaks specifically for power signals (unipolar) and average the last 10 cycles."""
+def get_power_peaks(power_raw: np.ndarray, custom_params: dict = None, cutoff: float = 0.1):
+    """Detect peaks specifically for power signals with optional custom tuning."""
     if not HAS_SCIPY:
         return None, 0.0
 
-    y_smooth = apply_lowpass_filter(power_raw, cutoff=0.1)
+    y_smooth = apply_lowpass_filter(power_raw, cutoff=cutoff)
+
+    # Parámetros por defecto
     params = {
         'height': np.percentile(y_smooth, 90),
         'prominence': np.std(y_smooth) * 1.5,
         'distance': 50
     }
-    peaks_idx, _ = find_peaks(y_smooth, **params)
+
+    if custom_params:
+        # Filtramos Nones y actualizamos
+        params.update({k: v for k, v in custom_params.items() if v is not None})
+
+    # Eliminamos 'cutoff' de params porque find_peaks no lo reconoce
+    search_params = {k: v for k, v in params.items() if k != 'cutoff'}
+
+    peaks_idx, _ = find_peaks(y_smooth, **search_params)
 
     if len(peaks_idx) > 0:
-        # Calculate mean of LAST 10 cycles (peaks)
         last_peaks = peaks_idx[-10:]
         mean_peak_power = np.mean(power_raw[last_peaks])
         return peaks_idx, float(mean_peak_power)
@@ -249,8 +259,9 @@ def calculate_mean_vpp_from_file(path: str, ext: str, gain: float) -> float:
 
 # --- PLOTTING ---
 
-def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_percent: int = 80, gain: float = None,
-                     plot_mode: str = 'voltage', req: float = None) -> str:
+def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_percent: int = 80,
+                     gain: float = None, plot_mode: str = 'voltage', req: float = None,
+                     peak_params: dict = None) -> str: # <--- Añadido peak_params
     if not HAS_PLOTLY:
         raise RuntimeError('plotly library is not installed')
 
@@ -264,16 +275,15 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
 
     time_col = 'Time(s)' if 'Time(s)' in df.columns else None
     plot_columns = [col for col in df.columns if col.lower() != 'index' and col != time_col]
-
-    if not plot_columns:
-        raise ValueError('No data columns to plot')
-
     primary_col = plot_columns[0]
     raw_y = df[primary_col].values
     analysis_info = None
 
+    # Extraer cutoff si existe en peak_params
+    cutoff_val = peak_params.get('cutoff', 0.1) if peak_params else 0.1
+
     if plot_mode == 'voltage' and HAS_SCIPY:
-        p_idx, t_idx, m_max, m_min, vpp = get_signal_peaks(raw_y)
+        p_idx, t_idx, m_max, m_min, vpp = get_signal_peaks(raw_y, custom_params=peak_params, cutoff=cutoff_val)
         if p_idx is not None:
             analysis_info = {
                 'x_peaks': df.loc[p_idx, time_col] if time_col else p_idx,
@@ -284,7 +294,7 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
                 'label': f' | Mean Vpp: {vpp:.3f}V'
             }
     elif plot_mode == 'power' and HAS_SCIPY:
-        p_idx, mean_peak = get_power_peaks(raw_y)
+        p_idx, mean_peak = get_power_peaks(raw_y, custom_params=peak_params, cutoff=cutoff_val)
         if p_idx is not None:
             analysis_info = {
                 'x_peaks': df.loc[p_idx, time_col] if time_col else p_idx,
