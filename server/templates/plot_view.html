@@ -116,7 +116,10 @@
             <input type="number" step="0.01" min="0.01" max="0.99" name="pk_cutoff" value="{{ peak_params.cutoff or 0.1 }}">
           </div>
 
-          <button type="submit" class="btn-update">Actualizar Gráfica</button>
+          <div style="display: flex; flex-direction: column; gap: 5px;">
+            <button type="submit" class="btn-update">Actualizar Gráfica</button>
+            <button type="submit" name="reset_peaks" value="1" class="btn-update" style="background-color: #6c757d;">Reset a Auto</button>
+          </div>
         </div>
       </form>
     </div>

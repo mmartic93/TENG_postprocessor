@@ -193,8 +193,6 @@ def register_routes(app):
                 except Exception as error:
                     entry['daq_error'] = str(error)
 
-            file_entries.append(entry)
-
             # Process Motor file
             if pair['motor']:
                 try:
@@ -323,7 +321,6 @@ def register_routes(app):
             daq_rel = daq_rel.replace('//', '/').replace('\\\\', '\\')
         downsample_percent = int(request.args.get('downsample', 80))
 
-
         if not metadata_path or not rel:
             flash('Missing parameters')
             return redirect(url_for('index'))
@@ -339,18 +336,36 @@ def register_routes(app):
             session['peak_params_store'] = {}
 
         # 2. Capture parameters from URL and SAVE them
-        url_params = {
-            'height': request.args.get('pk_height', type=float),
-            'prominence': request.args.get('pk_prom', type=float),
-            'distance': request.args.get('pk_dist', type=int),
-            'cutoff': request.args.get('pk_cutoff', type=float)
-        }
-        # Filter out Nones (only keep what user actually typed)
-        url_params = {k: v for k, v in url_params.items() if v is not None}
-        if url_params:
-            store = session['peak_params_store']
-            if graph_key not in store: store[graph_key] = {}
-            store[graph_key].update(url_params)
+        if request.args.get('reset_peaks') == '1':
+            store = session.get('peak_params_store', {})
+            if graph_key in store:
+                del store[graph_key]
+                session['peak_params_store'] = store
+        else:
+            store = session.get('peak_params_store', {})
+            if graph_key not in store:
+                store[graph_key] = {}
+
+            # For each parameter, if it's explicitly present in the URL:
+            # - If it has a value, save it.
+            # - If it's an empty string, delete it from the store (revert to auto).
+            for param, p_type, key in [
+                ('pk_height', float, 'height'),
+                ('pk_prom', float, 'prominence'),
+                ('pk_dist', int, 'distance'),
+                ('pk_cutoff', float, 'cutoff')
+            ]:
+                if param in request.args:
+                    val_str = request.args.get(param, '').strip()
+                    if val_str == '':
+                        # User cleared the field -> remove from store to revert to Auto
+                        store[graph_key].pop(key, None)
+                    else:
+                        try:
+                            store[graph_key][key] = p_type(val_str)
+                        except ValueError:
+                            pass
+
             session['peak_params_store'] = store  # Trigger session save
         # 3. LOAD the final parameters (Saved + Defaults)
         # This ensures that even if url_params is empty, we get the history
@@ -407,7 +422,8 @@ def register_routes(app):
                     )
                 except Exception as e:
                     flash(f"Could not load associated voltage file: {e}")
-                    plot_html = create_plot_html(df, f"Motor Data: {rel}", downsample_percent, peak_params=final_peak_params)
+                    plot_html = create_plot_html(df, f"Motor Data: {rel}", downsample_percent,
+                                                 peak_params=final_peak_params)
             else:
                 # PASAR peak_params A create_plot_html
                 plot_html = create_plot_html(df, f"{ext.upper()} : {rel}", downsample_percent, gain=gain,
