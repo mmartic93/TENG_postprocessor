@@ -338,26 +338,24 @@ def register_routes(app):
         if 'peak_params_store' not in session:
             session['peak_params_store'] = {}
 
-            # 2. Capture parameters from URL and SAVE them
-            url_params = {
-                'height': request.args.get('pk_height', type=float),
-                'prominence': request.args.get('pk_prom', type=float),
-                'distance': request.args.get('pk_dist', type=int),
-                'cutoff': request.args.get('pk_cutoff', type=float)
-            }
-            # Filter out Nones (only keep what user actually typed)
-            url_params = {k: v for k, v in url_params.items() if v is not None}
-
-            if url_params:
-                store = session['peak_params_store']
-                if graph_key not in store: store[graph_key] = {}
-                store[graph_key].update(url_params)
-                session['peak_params_store'] = store  # Trigger session save
-
-            # 3. LOAD the final parameters (Saved + Defaults)
-            # This ensures that even if url_params is empty, we get the history
-            final_peak_params = {'cutoff': 0.1}  # Default fallback
-            final_peak_params.update(session['peak_params_store'].get(graph_key, {}))
+        # 2. Capture parameters from URL and SAVE them
+        url_params = {
+            'height': request.args.get('pk_height', type=float),
+            'prominence': request.args.get('pk_prom', type=float),
+            'distance': request.args.get('pk_dist', type=int),
+            'cutoff': request.args.get('pk_cutoff', type=float)
+        }
+        # Filter out Nones (only keep what user actually typed)
+        url_params = {k: v for k, v in url_params.items() if v is not None}
+        if url_params:
+            store = session['peak_params_store']
+            if graph_key not in store: store[graph_key] = {}
+            store[graph_key].update(url_params)
+            session['peak_params_store'] = store  # Trigger session save
+        # 3. LOAD the final parameters (Saved + Defaults)
+        # This ensures that even if url_params is empty, we get the history
+        final_peak_params = {'cutoff': 0.1}  # Default fallback
+        final_peak_params.update(session['peak_params_store'].get(graph_key, {}))
 
         try:
             target = resolve_relative_path(meta_dir, rel)
