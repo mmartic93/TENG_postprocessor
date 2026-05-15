@@ -223,7 +223,7 @@ def calculate_mean_vpp(df: pd.DataFrame, gain: float) -> float:
     return vpp
 
 
-def calculate_mean_power(df: pd.DataFrame, gain: float, req: float) -> float:
+def calculate_mean_power(df: pd.DataFrame, gain: float, req: float, peak_params: dict = None) -> float:
     if gain is None or req is None or req == 0:
         return 0.0
     df_gain = apply_gain_to_dataframe(df, gain)
@@ -231,33 +231,39 @@ def calculate_mean_power(df: pd.DataFrame, gain: float, req: float) -> float:
     return float(power_df['Power'].mean())
 
 
-def calculate_peak_power(df: pd.DataFrame, gain: float, req: float) -> float:
+def calculate_peak_power(df: pd.DataFrame, gain: float, req: float,peak_params: dict = None) -> float:
     """Calculates average peak power over the last 10 cycles."""
     if gain is None or req is None or req == 0:
         return 0.0
     df_gain = apply_gain_to_dataframe(df, gain)
     power_df = calculate_power_dataframe(df_gain, req)
-    _, mean_peak = get_power_peaks(power_df['Power'].values)
+    _, mean_peak = get_power_peaks(power_df['Power'].values,custom_params=peak_params)
     return mean_peak
 
 
-def calculate_mean_power_from_file(path: str, ext: str, gain: float, req: float) -> float:
+def calculate_mean_power_from_file(path: str, ext: str, gain: float, req: float, peak_params: dict = None) -> float:
+    """Wrapper that now accepts peak_params."""
     try:
         df = csv_to_dataframe(path) if ext == '.csv' else tdms_to_dataframe(path)
-        return calculate_mean_power(df, gain, req)
-    except Exception:
+        # Pass peak_params to the actual calculation logic
+        return calculate_mean_power(df, gain, req, peak_params=peak_params)
+    except Exception as e:
+        print(f"Error in mean power calculation: {e}")
         return 0.0
 
 
-def calculate_peak_power_from_file(path: str, ext: str, gain: float, req: float) -> float:
+def calculate_peak_power_from_file(path: str, ext: str, gain: float, req: float, peak_params: dict = None) -> float:
+    """Wrapper that now accepts peak_params."""
     try:
         df = csv_to_dataframe(path) if ext == '.csv' else tdms_to_dataframe(path)
-        return calculate_peak_power(df, gain, req)
-    except Exception:
+        # Pass peak_params to the actual calculation logic
+        return calculate_peak_power(df, gain, req, peak_params=peak_params)
+    except Exception as e:
+        print(f"Error in peak power calculation: {e}")
         return 0.0
 
 
-def calculate_mean_vpp_from_file(path: str, ext: str, gain: float) -> float:
+def calculate_mean_vpp_from_file(path: str, ext: str, gain: float, peak_params: dict = None) -> float:
     try:
         df = csv_to_dataframe(path) if ext == '.csv' else tdms_to_dataframe(path)
         return calculate_mean_vpp(df, gain)

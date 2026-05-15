@@ -135,66 +135,65 @@ def register_routes(app):
             return redirect(url_for('metadata_preview'))
 
         file_entries = []
+        param_store = session.get('peak_params_store', {})
+
         for pair in file_pairs:
-            entry = {'exp_id': pair['exp_id'], 'rload_id': pair.get('rload_id', ''),
-                     'tribu_id': pair.get('tribu_id', ''),'mean_power': None,
-                     'peak_power': None,
-                        'mean_vpp': None,
-                        'daq_rel': None,
-                        'motor_rel': None}
+            # Create the base entry first
+            entry = {
+                'exp_id': pair['exp_id'],
+                'rload_id': pair.get('rload_id', ''),
+                'tribu_id': pair.get('tribu_id', ''),
+                'mean_power': None,
+                'peak_power': None,
+                'mean_vpp': None,
+                'daq_rel': None,
+                'motor_rel': None
+            }
+
+            # 2. Get Req and Gain (needed for the key)
             if loads_info_df is not None:
                 load_info = lookup_load_info(loads_info_df, pair.get('rload_id', ''))
                 entry['req'] = load_info['Req']
                 entry['gain'] = load_info['Gain']
                 entry['rload_missing'] = load_info['missing']
             else:
-                entry['req'] = ''
-                entry['gain'] = ''
-                entry['rload_missing'] = False
-            if loads_description_error:
-                entry['loads_description_error'] = loads_description_error
+                entry['req'] = '0'
+                entry['gain'] = '1'
 
-            # Process DAQ file
+            # 3. NOW create the graph_key and get saved params
+            tribu_id = entry['tribu_id']
+            req_val = entry['req']
+            graph_key = f"{tribu_id}_R{req_val}"
+            saved_params = param_store.get(graph_key, {})
+
+            # 4. Use saved_params in calculations
             if pair['daq']:
                 try:
                     daq_path = resolve_relative_path(meta_dir, pair['daq'])
-                    if not file_exists(daq_path):
-                        entry['daq_error'] = 'File not found'
-                    else:
+                    if file_exists(daq_path):
                         _, ext = os.path.splitext(daq_path)
                         entry['daq_rel'] = normalize_display_path(pair['daq'])
                         entry['daq_ext'] = ext.lower()
-                        entry['daq_abs'] = daq_path
 
                         if entry.get('req') and entry.get('gain'):
-                            try:
-                                # Calculate Mean Power
-                                entry['mean_power'] = calculate_mean_power_from_file(
-                                    daq_path,
-                                    entry['daq_ext'],
-                                    float(entry['gain']),
-                                    float(entry['req']),
-                                )
-                                # Calculate Peak Power
-                                entry['peak_power'] = calculate_peak_power_from_file(
-                                    daq_path,
-                                    entry['daq_ext'],
-                                    float(entry['gain']),
-                                    float(entry['req']),
-                                )
-                                # Calculate VPP
-                                from data_processing.preview_service import calculate_mean_vpp_from_file
-                                entry['mean_vpp'] = calculate_mean_vpp_from_file(
-                                    daq_path,
-                                    entry['daq_ext'],
-                                    float(entry['gain'])
-                                )
-                            except Exception:
-                                entry['mean_power'] = None
-                                entry['peak_power'] = None
-                                entry['mean_vpp'] = None
+                            # IMPORTANT: Pass saved_params to all calculation functions
+                            entry['mean_power'] = calculate_mean_power_from_file(
+                                daq_path, entry['daq_ext'], float(entry['gain']), float(entry['req']),
+                                peak_params=saved_params  # <--- Pass here
+                            )
+                            entry['peak_power'] = calculate_peak_power_from_file(
+                                daq_path, entry['daq_ext'], float(entry['gain']), float(entry['req']),
+                                peak_params=saved_params  # <--- Pass here
+                            )
+                            from data_processing.preview_service import calculate_mean_vpp_from_file
+                            entry['mean_vpp'] = calculate_mean_vpp_from_file(
+                                daq_path, entry['daq_ext'], float(entry['gain']),
+                                peak_params=saved_params  # <--- Pass here
+                            )
                 except Exception as error:
                     entry['daq_error'] = str(error)
+
+            file_entries.append(entry)
 
             # Process Motor file
             if pair['motor']:
@@ -331,16 +330,34 @@ def register_routes(app):
 
         meta_dir = os.path.dirname(metadata_path)
 
-        # --- CAPTURAR PARÁMETROS DE DETECCIÓN DE PICOS ---
-        try:
-            peak_params = {
+        # 1. Get the identifiers from the URL
+        tribu_id = request.args.get('tribu_id', 'Unknown')
+        req_val = request.args.get('req', '0')
+        graph_key = f"{tribu_id}_R{req_val}"  # Example: "Tribu123_R1000"
+
+        if 'peak_params_store' not in session:
+            session['peak_params_store'] = {}
+
+            # 2. Capture parameters from URL and SAVE them
+            url_params = {
                 'height': request.args.get('pk_height', type=float),
                 'prominence': request.args.get('pk_prom', type=float),
                 'distance': request.args.get('pk_dist', type=int),
-                'cutoff': request.args.get('pk_cutoff', type=float, default=0.1)
+                'cutoff': request.args.get('pk_cutoff', type=float)
             }
-        except Exception:
-            peak_params = {'cutoff': 0.1}
+            # Filter out Nones (only keep what user actually typed)
+            url_params = {k: v for k, v in url_params.items() if v is not None}
+
+            if url_params:
+                store = session['peak_params_store']
+                if graph_key not in store: store[graph_key] = {}
+                store[graph_key].update(url_params)
+                session['peak_params_store'] = store  # Trigger session save
+
+            # 3. LOAD the final parameters (Saved + Defaults)
+            # This ensures that even if url_params is empty, we get the history
+            final_peak_params = {'cutoff': 0.1}  # Default fallback
+            final_peak_params.update(session['peak_params_store'].get(graph_key, {}))
 
         try:
             target = resolve_relative_path(meta_dir, rel)
@@ -392,16 +409,16 @@ def register_routes(app):
                     )
                 except Exception as e:
                     flash(f"Could not load associated voltage file: {e}")
-                    plot_html = create_plot_html(df, f"Motor Data: {rel}", downsample_percent, peak_params=peak_params)
+                    plot_html = create_plot_html(df, f"Motor Data: {rel}", downsample_percent, peak_params=final_peak_params)
             else:
                 # PASAR peak_params A create_plot_html
                 plot_html = create_plot_html(df, f"{ext.upper()} : {rel}", downsample_percent, gain=gain,
-                                             plot_mode=plot_mode, req=req, peak_params=peak_params)
+                                             plot_mode=plot_mode, req=req, peak_params=final_peak_params)
 
             mean_power = None
             if plot_mode == 'power' and gain is not None and req is not None:
                 # Aquí también podrías pasar peak_params si calculate_mean_power_from_file lo requiere
-                mean_power = calculate_mean_power_from_file(target, ext, gain, req)
+                mean_power = calculate_mean_power_from_file(target, ext, gain, req, peak_params=final_peak_params)
 
             df_info = f'{len(df)} rows × {len(df.columns)} columns'
             return render_template(
@@ -415,7 +432,7 @@ def register_routes(app):
                 req_display=req_value,
                 mean_power=mean_power,
                 daq_rel=daq_rel,
-                peak_params=peak_params  # PASAR A LA PLANTILLA
+                peak_params=final_peak_params  # PASAR A LA PLANTILLA
             )
         except Exception as error:
             import traceback
