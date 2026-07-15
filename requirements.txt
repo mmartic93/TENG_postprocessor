@@ -1,7 +1,9 @@
 flask
 pandas
+pandas-stubs
 plotly
 nptdms
 odfpy
 scipy
+scipy-stubs
 Flask-Session
