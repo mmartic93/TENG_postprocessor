@@ -3,3 +3,5 @@ pandas
 plotly
 nptdms
 odfpy
+scipy
+Flask-Session
