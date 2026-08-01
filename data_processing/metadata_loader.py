@@ -3,6 +3,28 @@ import pandas as pd
 from typing import List, Dict
 from server.config import ALLOWED_META_EXT, REQUIRED_META_COLUMNS
 
+from datetime import datetime
+
+def make_date_token(s: str) -> str:
+    """Convert various date strings to 'DDMMYYYY_HHMMSS'"""
+    if s is None:
+        raise ValueError('Empty date string')
+    s_norm = ' '.join(str(s).split())
+
+    # Try a set of common explicit formats
+    formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(s_norm, fmt)
+            return dt.strftime("%d%m%Y_%H%M%S")
+        except ValueError:
+            continue
+
+    raise Exception("Unable to parse date string: %s", s)
+
 
 def allowed_meta(filename: str) -> bool:
     _, ext = os.path.splitext(filename)
@@ -22,6 +44,15 @@ def parse_metadata_csv(path: str) -> pd.DataFrame:
         except Exception as error:
             raise RuntimeError(f'Unable to parse ODS metadata: {error}') from error
         df = df.fillna('')
+    elif ext in ('.xlsx', '.xls'):
+        try:
+            # Let pandas choose the appropriate engine (openpyxl for .xlsx, xlrd for .xls)
+            df = pd.read_excel(path, dtype=str)
+        except ImportError as error:
+            raise RuntimeError('Excel support requires openpyxl (for .xlsx) and/or xlrd (for .xls): pip install openpyxl xlrd') from error
+        except Exception as error:
+            raise RuntimeError(f'Unable to parse Excel metadata: {error}') from error
+        df = df.fillna('')
     else:
         raise ValueError('Unsupported metadata extension: ' + ext)
     return df
@@ -32,11 +63,11 @@ def format_metadata_rows(df: pd.DataFrame) -> List[Dict[str, str]]:
     for index, row in df.reset_index(drop=True).iterrows():
         rows.append({
             'row_number': index + 1,
-            'ExpId': row.get('ExpId', ''),
             'TribuId': row.get('TribuId', ''),
             'RloadId': row.get('RloadId', ''),
-            'DaqFile': row.get('DaqFile', ''),
-            'MotorFile': row.get('MotorFile', ''),
+            'SampleIdTriboNeg': row.get('SampleIdTriboNeg', ''),
+            'SampleIdTriboPos': row.get('SampleIdTriboPos', ''),
+            'Date': row.get('Date', '')
         })
     return rows
 
@@ -66,7 +97,7 @@ def get_rows_for_tribuid(df: pd.DataFrame, tribuid_input: str) -> pd.DataFrame:
 
 
 def find_loads_description_file(base_dir: str) -> str:
-    for filename in ['LoadsDescription.ods', 'LoadsDescription.csv']:
+    for filename in ['LoadsDescription.ods', 'LoadsDescription.xlsx', 'LoadsDescription.xls', 'LoadsDescription.csv']:
         candidate = os.path.join(base_dir, filename)
         if os.path.exists(candidate):
             return candidate
@@ -83,11 +114,11 @@ def load_loads_description(path: str) -> pd.DataFrame:
     return df
 
 
-def lookup_load_info(loads_df: pd.DataFrame, rload_id: str) -> Dict[str, str]:
-    if not rload_id or str(rload_id).strip() == '':
+def lookup_load_info(loads_df: pd.DataFrame, RloadId: str) -> Dict[str, str]:
+    if not RloadId or str(RloadId).strip() == '':
         return {'Req': '', 'Gain': '', 'missing': False}
-    rload_id_norm = str(rload_id).strip()
-    matched = loads_df[loads_df['RloadId'] == rload_id_norm]
+    RloadId_norm = str(RloadId).strip()
+    matched = loads_df[loads_df['RloadId'] == RloadId_norm]
     if matched.empty:
         return {'Req': '', 'Gain': '', 'missing': True}
 
@@ -114,46 +145,37 @@ def collect_sample_files(df: pd.DataFrame) -> List[str]:
     return list(dict.fromkeys(daq_files + motor_files))
 
 
-def get_paired_files(df: pd.DataFrame) -> List[Dict[str, str]]:
-    """Return DAQ and Motor file pairs from metadata, preserving row order."""
-    pairs = []
+def get_experiment_folders(df: pd.DataFrame, raw_dir: str) -> List[dict]:
+    """Reconstruct experiment folder paths based on metadata.
+
+    Assumes there is a `RawData` directory in the same folder as the metadata file.
+    For each row the function attempts to locate folders under:
+      RawData/<TribuId>/<SamplePair>/... (any depth)
+    and collects all subfolders that look like experiment folders (commonly containing
+    the RloadId as a suffix like '-100' or date-time prefixes).
+
+    Returns a list of dictionary representing the experiment folders.
+    """
+    results: List[dict] = []
+
     for index, row in df.iterrows():
-        # Safely extract values, checking both column existence and null values
-        daq = ''
-        if 'DaqFile' in df.columns:
-            val = row['DaqFile']
-            if pd.notna(val) and str(val).strip():
-                daq = str(val).strip()
-        
-        motor = ''
-        if 'MotorFile' in df.columns:
-            val = row['MotorFile']
-            if pd.notna(val) and str(val).strip():
-                motor = str(val).strip()
-        
-        rload_id = ''
-        if 'RloadId' in df.columns:
-            val = row['RloadId']
-            if pd.notna(val) and str(val).strip():
-                rload_id = str(val).strip()
-        
-        exp_id = ''
-        if 'ExpId' in df.columns:
-            val = row['ExpId']
-            if pd.notna(val) and str(val).strip():
-                exp_id = str(val).strip()
+        TribuId = str(row.get('TribuId', '') or '').strip()
+        RloadId = str(row.get('RloadId', '') or '').strip()
+        sample_neg = str(row.get('SampleIdTriboNeg', '') or '').strip()
+        sample_pos = str(row.get('SampleIdTriboPos', '') or '').strip()
+        date = str(row.get('Date', '') or '').strip()
+        date = make_date_token(date)
 
-        tribu_id = ''
-        if 'TribuId' in df.columns:
-            val = row['TribuId']
-            if pd.notna(val) and str(val).strip():
-                tribu_id = str(val).strip()
-
-        pairs.append({
-            'daq': daq.replace('\\', '/'),
-            'motor': motor.replace('\\', '/'),
-            'exp_id': exp_id,
-            'rload_id': rload_id,
-            'tribu_id': tribu_id,
-        })
-    return pairs
+        exp_path = os.path.join(raw_dir, TribuId, f"{sample_neg}-{sample_pos}", f"{date}-{RloadId}")
+        if not os.path.exists(exp_path):
+            raise Exception("Error, the expected exp_path is not valid: %s", exp_path)
+        else:
+            results.append({
+                'TribuId': TribuId,
+                'RloadId': RloadId,
+                'SampleIdTriboNeg': sample_neg,
+                'SampleIdTriboPos': sample_pos,
+                'Date': date,
+                'exp_path': exp_path,
+            })
+    return results

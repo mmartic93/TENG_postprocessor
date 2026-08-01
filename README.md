@@ -5,13 +5,13 @@ This is a local Flask-based web app for loading metadata files, resolving relati
 ## Required files
 
 - A metadata file in the same folder as your data directory:
-  - `*.csv` or `*.ods`
+  - `*.csv`, `*.ods`, or `*.xlsx` (Excel)
 - The metadata file must include these columns:
-  - `ExpId`
   - `TribuId`
   - `RloadId`
-  - `DaqFile`
-  - `MotorFile`
+  - `SampleIdTriboNeg`
+  - `SampleIdTriboPos`
+  - `Date`
 - A sidecar loads description file in the same folder as the metadata file:
   - `LoadsDescription.ods` or `LoadsDescription.csv`
 - The `LoadsDescription` file must contain at least:
@@ -27,7 +27,6 @@ This is a local Flask-based web app for loading metadata files, resolving relati
 4. Enter the `TribuId` string you want to inspect
 5. The app lists all experiments for that `TribuId`
 6. For each experiment it shows:
-   - `ExpId`
    - `RloadId`
    - `Req`
    - `Gain`
@@ -52,7 +51,7 @@ This project requires Python and the following packages in the virtual environme
 - `pandas`
 - `plotly`
 - `nptdms`
-- `odfpy` (for `.ods` support)
+- `odfpy` (for `.ods` support) and `openpyxl` (for `.xlsx` support)
 
 ## Installation
 

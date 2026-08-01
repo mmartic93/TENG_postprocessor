@@ -22,22 +22,20 @@
       <thead>
         <tr>
           <th>Row</th>
-          <th>ExpId</th>
           <th>TribuId</th>
           <th>RloadId</th>
-          <th>DaqFile</th>
-          <th>MotorFile</th>
+          <th>SampleIdTriboNeg</th>
+          <th>SampleIdTriboPos</th>
         </tr>
       </thead>
       <tbody>
         {% for row in rows %}
           <tr>
             <td>{{ row.row_number }}</td>
-            <td>{{ row.ExpId }}</td>
             <td>{{ row.TribuId }}</td>
             <td>{{ row.RloadId }}</td>
-            <td>{{ row.DaqFile }}</td>
-            <td>{{ row.MotorFile }}</td>
+            <td>{{ row.SampleIdTriboNeg }}</td>
+            <td>{{ row.SampleIdTriboPos }}</td>
           </tr>
         {% endfor %}
       </tbody>

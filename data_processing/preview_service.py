@@ -80,7 +80,7 @@ def apply_gain_to_dataframe(df: pd.DataFrame, gain: float) -> pd.DataFrame:
         return df
     result = df.copy()
     for col in result.columns:
-        if col.lower() in ['index', 'time(s)', 'time']:
+        if col.lower() in ['index', 'time(s)', 'time', 'Time (s)']:
             continue
         if pd.api.types.is_numeric_dtype(result[col]):
             result[col] = result[col].astype(float) / gain
@@ -210,7 +210,7 @@ def get_plateau_peaks(y_vals, threshold_percentile=80, cutoff=0.05):
 
 # --- CALCULATION WRAPPERS ---
 
-def calculate_mean_vpp(df: pd.DataFrame, gain: float) -> float:
+def calculate_mean_vpp(df: pd.DataFrame, gain: float, peak_params: dict = None) -> float:
     df_gain = apply_gain_to_dataframe(df, gain)
     time_col = 'Time(s)' if 'Time(s)' in df_gain.columns else None
     plot_columns = [col for col in df_gain.columns if col.lower() != 'index' and col != time_col]
@@ -231,7 +231,7 @@ def calculate_mean_power(df: pd.DataFrame, gain: float, req: float, peak_params:
     return float(power_df['Power'].mean())
 
 
-def calculate_peak_power(df: pd.DataFrame, gain: float, req: float,peak_params: dict = None) -> float:
+def calculate_peak_power(df: pd.DataFrame, gain: float, req: float, peak_params: dict = None) -> float:
     """Calculates average peak power over the last 10 cycles."""
     if gain is None or req is None or req == 0:
         return 0.0
@@ -264,9 +264,10 @@ def calculate_peak_power_from_file(path: str, ext: str, gain: float, req: float,
 
 
 def calculate_mean_vpp_from_file(path: str, ext: str, gain: float, peak_params: dict = None) -> float:
+    """Wrapper that now accepts peak_params."""
     try:
         df = csv_to_dataframe(path) if ext == '.csv' else tdms_to_dataframe(path)
-        return calculate_mean_vpp(df, gain)
+        return calculate_mean_vpp(df, gain, peak_params=peak_params)
     except Exception:
         return 0.0
 
@@ -287,7 +288,7 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
             raise ValueError('Req value is required for power plot')
         df = calculate_power_dataframe(df, req)
 
-    time_col = 'Time(s)' if 'Time(s)' in df.columns else None
+    time_col = 'Time (s)' if 'Time (s)' in df.columns else None
     plot_columns = [col for col in df.columns if col.lower() != 'index' and col != time_col]
     primary_col = plot_columns[0]
     raw_y = df[primary_col].values
@@ -416,7 +417,7 @@ def create_mean_power_vs_req_plot(grouped_power: dict, grouped_peak_power: dict 
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    for tribu_id, points in grouped_power.items():
+    for TribuId, points in grouped_power.items():
         if not points: continue
         points.sort(key=lambda x: x[0])
         reqs, powers = zip(*points)
@@ -426,15 +427,15 @@ def create_mean_power_vs_req_plot(grouped_power: dict, grouped_peak_power: dict 
             go.Scatter(
                 x=reqs, y=powers,
                 mode='markers+lines',
-                name=f'{tribu_id} (Mean)',
+                name=f'{TribuId} (Mean)',
                 line=dict(color=mean_color)
             ),
             secondary_y=False
         )
 
         # Secondary axis (Peak Power) - Dashed Red Line
-        if grouped_peak_power and tribu_id in grouped_peak_power:
-            peak_points = grouped_peak_power[tribu_id]
+        if grouped_peak_power and TribuId in grouped_peak_power:
+            peak_points = grouped_peak_power[TribuId]
             peak_points.sort(key=lambda x: x[0])
             p_reqs, p_peaks = zip(*peak_points)
             fig.add_trace(
@@ -442,7 +443,7 @@ def create_mean_power_vs_req_plot(grouped_power: dict, grouped_peak_power: dict 
                     x=p_reqs, y=p_peaks,
                     mode='markers+lines',
                     line=dict(dash='dash', color=peak_color),
-                    name=f'{tribu_id} (Peak)'
+                    name=f'{TribuId} (Peak)'
                 ),
                 secondary_y=True
             )
@@ -474,11 +475,11 @@ def create_mean_vpp_vs_req_plot(grouped_data: dict, title: str = 'Mean Vpp vs Re
         return '<p>No data available</p>'
 
     fig = go.Figure()
-    for tribu_id, data_points in grouped_data.items():
+    for TribuId, data_points in grouped_data.items():
         if not data_points: continue
         data_points.sort(key=lambda x: x[0])
         reqs, vpps = zip(*data_points)
-        fig.add_trace(go.Scatter(x=reqs, y=vpps, mode='markers+lines', name=f'{tribu_id}'))
+        fig.add_trace(go.Scatter(x=reqs, y=vpps, mode='markers+lines', name=f'{TribuId}'))
 
     fig.update_layout(title=title, xaxis_title='Resistance (Req) [ohms]', yaxis_title='Mean Vpp [V]', height=400)
     return fig.to_html(include_plotlyjs='cdn', div_id='mean_vpp_plot')
@@ -491,9 +492,9 @@ def create_optimal_power_plot(optimal_points: list, title: str = 'Optimal Power 
     from plotly.subplots import make_subplots
 
     # Sort alphabetically by TribuId
-    optimal_points.sort(key=lambda x: str(x['tribu_id']))
+    optimal_points.sort(key=lambda x: str(x['TribuId']))
 
-    tribu_ids = [str(p['tribu_id']) for p in optimal_points]
+    tribu_ids = [str(p['TribuId']) for p in optimal_points]
 
     # Extract Mean Power Data
     max_means = [p.get('max_power', 0) for p in optimal_points]

@@ -1,6 +1,8 @@
 import os
 from flask import render_template, request, redirect, url_for, session, flash, send_file
 from werkzeug.utils import secure_filename
+from data_processing.LoadData import ExtractCycles
+import pandas as pd
 
 from server.config import UPLOAD_FOLDER, MAX_PREVIEW_ROWS
 from data_processing.file_resolver import resolve_relative_path, file_exists, normalize_display_path
@@ -11,18 +13,18 @@ from data_processing.metadata_loader import (
     validate_metadata_columns,
     get_required_columns,
     get_rows_for_tribuid,
-    get_paired_files,
+    get_experiment_folders,
     find_loads_description_file,
     load_loads_description,
     lookup_load_info,
 )
 from data_processing.preview_service import (
     csv_to_dataframe,
-    tdms_to_dataframe,
     create_plot_html,
-    calculate_mean_power_from_file,
-    calculate_peak_power_from_file,
     create_mean_power_vs_req_plot,
+    calculate_mean_power,
+    calculate_peak_power,
+    calculate_mean_vpp,
     has_tdms_support,
     has_plotly_support,
 )
@@ -129,7 +131,7 @@ def register_routes(app):
             sample = get_rows_for_tribuid(df, selected_tribuid)
             if sample.empty:
                 raise ValueError(f'No rows found for TribuId {selected_tribuid}')
-            file_pairs = get_paired_files(sample)
+            experiment_folders = get_experiment_folders(sample, meta_dir)
         except Exception as error:
             flash(f'Unable to read selected TribuId rows: {error}')
             return redirect(url_for('metadata_preview'))
@@ -137,12 +139,20 @@ def register_routes(app):
         file_entries = []
         param_store = session.get('peak_params_store', {})
 
-        for pair in file_pairs:
+        for experiment in experiment_folders:
+            exp_path = experiment.get('exp_path', '')
+            Cycles_list = ExtractCycles(exp_path)
+            if len(Cycles_list) == 0:
+                raise Exception("Cycles list is empty")
+            dfData_all = pd.concat(Cycles_list, ignore_index=True)
+
             # Create the base entry first
             entry = {
-                'exp_id': pair['exp_id'],
-                'rload_id': pair.get('rload_id', ''),
-                'tribu_id': pair.get('tribu_id', ''),
+                'RloadId': experiment.get('RloadId', ''),
+                'TribuId': experiment.get('TribuId', ''),
+                'SampleIdTriboNeg': experiment.get('SampleIdTriboNeg', ''),
+                'SampleIdTriboPos': experiment.get('SampleIdTriboPos', ''),
+                'Date': experiment.get('Date', ''),
                 'mean_power': None,
                 'peak_power': None,
                 'mean_vpp': None,
@@ -152,7 +162,7 @@ def register_routes(app):
 
             # 2. Get Req and Gain (needed for the key)
             if loads_info_df is not None:
-                load_info = lookup_load_info(loads_info_df, pair.get('rload_id', ''))
+                load_info = lookup_load_info(loads_info_df, experiment.get('RloadId', ''))
                 entry['req'] = load_info['Req']
                 entry['gain'] = load_info['Gain']
                 entry['rload_missing'] = load_info['missing']
@@ -161,51 +171,28 @@ def register_routes(app):
                 entry['gain'] = '1'
 
             # 3. NOW create the graph_key and get saved params
-            tribu_id = entry['tribu_id']
+            TribuId = entry['TribuId']
             req_val = entry['req']
-            graph_key = f"{tribu_id}_R{req_val}"
+            graph_key = f"{TribuId}_R{req_val}"
             saved_params = param_store.get(graph_key, {})
 
             # 4. Use saved_params in calculations
-            if pair['daq']:
-                try:
-                    daq_path = resolve_relative_path(meta_dir, pair['daq'])
-                    if file_exists(daq_path):
-                        _, ext = os.path.splitext(daq_path)
-                        entry['daq_rel'] = normalize_display_path(pair['daq'])
-                        entry['daq_ext'] = ext.lower()
-
-                        if entry.get('req') and entry.get('gain'):
-                            # IMPORTANT: Pass saved_params to all calculation functions
-                            entry['mean_power'] = calculate_mean_power_from_file(
-                                daq_path, entry['daq_ext'], float(entry['gain']), float(entry['req']),
-                                peak_params=saved_params  # <--- Pass here
-                            )
-                            entry['peak_power'] = calculate_peak_power_from_file(
-                                daq_path, entry['daq_ext'], float(entry['gain']), float(entry['req']),
-                                peak_params=saved_params  # <--- Pass here
-                            )
-                            from data_processing.preview_service import calculate_mean_vpp_from_file
-                            entry['mean_vpp'] = calculate_mean_vpp_from_file(
-                                daq_path, entry['daq_ext'], float(entry['gain']),
-                                peak_params=saved_params  # <--- Pass here
-                            )
-                except Exception as error:
-                    entry['daq_error'] = str(error)
-
-            # Process Motor file
-            if pair['motor']:
-                try:
-                    motor_path = resolve_relative_path(meta_dir, pair['motor'])
-                    if not file_exists(motor_path):
-                        entry['motor_error'] = 'File not found'
-                    else:
-                        _, ext = os.path.splitext(motor_path)
-                        entry['motor_rel'] = normalize_display_path(pair['motor'])
-                        entry['motor_ext'] = ext.lower()
-                        entry['motor_abs'] = motor_path
-                except Exception as error:
-                    entry['motor_error'] = str(error)
+            try:
+                # IMPORTANT: Pass saved_params to all calculation functions
+                entry['mean_power'] = calculate_mean_power(
+                    dfData_all, float(entry['gain']), float(entry['req']),
+                    peak_params=saved_params  # <--- Pass here
+                )
+                entry['peak_power'] = calculate_peak_power(
+                    dfData_all, float(entry['gain']), float(entry['req']),
+                    peak_params=saved_params  # <--- Pass here
+                )
+                entry['mean_vpp'] = calculate_mean_vpp(
+                    dfData_all, float(entry['gain']),
+                    peak_params=saved_params  # <--- Pass here
+                )
+            except Exception as error:
+                entry['read_error'] = str(error)
 
             file_entries.append(entry)
 
@@ -217,7 +204,7 @@ def register_routes(app):
 
         for entry in file_entries:
             req = entry.get('req')
-            t_id = entry.get('tribu_id', 'Unknown')
+            t_id = entry.get('TribuId', 'Unknown')
             if req:
                 req_val = float(req)
                 if entry.get('mean_power') is not None:
@@ -234,7 +221,7 @@ def register_routes(app):
         all_tribus = set(grouped_power_data.keys()).union(set(grouped_peak_power_data.keys()))
 
         for t_id in all_tribus:
-            tribu_info = {'tribu_id': t_id}
+            tribu_info = {'TribuId': t_id}
 
             # 1. Find the point with the maximum MEAN power
             points_mean = grouped_power_data.get(t_id, [])
@@ -328,9 +315,9 @@ def register_routes(app):
         meta_dir = os.path.dirname(metadata_path)
 
         # 1. Get the identifiers from the URL
-        tribu_id = request.args.get('tribu_id', 'Unknown')
+        TribuId = request.args.get('TribuId', 'Unknown')
         req_val = request.args.get('req', '0')
-        graph_key = f"{tribu_id}_R{req_val}"  # Example: "Tribu123_R1000"
+        graph_key = f"{TribuId}_R{req_val}"  # Example: "Tribu123_R1000"
 
         if 'peak_params_store' not in session:
             session['peak_params_store'] = {}
