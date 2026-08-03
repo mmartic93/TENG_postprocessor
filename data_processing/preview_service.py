@@ -4,6 +4,8 @@ from scipy.signal import butter, filtfilt
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 from scipy.ndimage import label
+import json, os
+
 try:
     from nptdms import TdmsFile
 
@@ -75,15 +77,26 @@ def tdms_to_dataframe(path: str) -> pd.DataFrame:
 
 # --- MATH HELPERS ---
 
-def apply_gain_to_dataframe(df: pd.DataFrame, gain: float) -> pd.DataFrame:
-    if gain is None:
-        return df
+def apply_gain_to_dataframe(df: pd.DataFrame, exp_path, gain: float) -> pd.DataFrame:
     result = df.copy()
-    for col in result.columns:
-        if col.lower() in ['index', 'time(s)', 'time', 'Time (s)']:
-            continue
-        if pd.api.types.is_numeric_dtype(result[col]):
-            result[col] = result[col].astype(float) / gain
+    if gain:
+        # Apply voltage divisor gains
+        for col in result.columns:
+            if col.lower() not in ['voltage', 'current', 'resistance', 'charge']:
+                continue
+            if pd.api.types.is_numeric_dtype(result[col]):
+                result[col] = result[col].astype(float) / gain
+
+    # Apply Keithley 2V range conversion factor
+    json_path = os.path.join(exp_path, "experiment_metadata.json")
+    with open(json_path, 'r') as f:
+        json_dict = json.load(f)
+    for task in json_dict["DAQTasks"]:
+        for channel in task["DAQ_CHANNELS"]:
+            conversion_factor = task["DAQ_CHANNELS"][channel]["conversion_factor"]
+            if conversion_factor:
+                result[channel] *= conversion_factor
+
     return result
 
 
@@ -210,8 +223,8 @@ def get_plateau_peaks(y_vals, threshold_percentile=80, cutoff=0.05):
 
 # --- CALCULATION WRAPPERS ---
 
-def calculate_mean_vpp(df: pd.DataFrame, gain: float, peak_params: dict = None) -> float:
-    df_gain = apply_gain_to_dataframe(df, gain)
+def calculate_mean_vpp(df: pd.DataFrame, exp_path: str, gain: float, peak_params: dict = None) -> float:
+    df_gain = apply_gain_to_dataframe(df, exp_path, gain)
     time_col = 'Time(s)' if 'Time(s)' in df_gain.columns else None
     plot_columns = [col for col in df_gain.columns if col.lower() != 'index' and col != time_col]
 
@@ -223,65 +236,34 @@ def calculate_mean_vpp(df: pd.DataFrame, gain: float, peak_params: dict = None) 
     return vpp
 
 
-def calculate_mean_power(df: pd.DataFrame, gain: float, req: float, peak_params: dict = None) -> float:
+def calculate_mean_power(df: pd.DataFrame, gain: float, exp_path: str, req: float, peak_params: dict = None) -> float:
     if gain is None or req is None or req == 0:
         return 0.0
-    df_gain = apply_gain_to_dataframe(df, gain)
+    df_gain = apply_gain_to_dataframe(df, exp_path, gain)
     power_df = calculate_power_dataframe(df_gain, req)
     return float(power_df['Power'].mean())
 
 
-def calculate_peak_power(df: pd.DataFrame, gain: float, req: float, peak_params: dict = None) -> float:
+def calculate_peak_power(df: pd.DataFrame, gain: float, exp_path: str, req: float, peak_params: dict = None) -> float:
     """Calculates average peak power over the last 10 cycles."""
     if gain is None or req is None or req == 0:
         return 0.0
-    df_gain = apply_gain_to_dataframe(df, gain)
+    df_gain = apply_gain_to_dataframe(df, exp_path, gain)
     power_df = calculate_power_dataframe(df_gain, req)
     _, mean_peak = get_power_peaks(power_df['Power'].values,custom_params=peak_params)
     return mean_peak
 
 
-def calculate_mean_power_from_file(path: str, ext: str, gain: float, req: float, peak_params: dict = None) -> float:
-    """Wrapper that now accepts peak_params."""
-    try:
-        df = csv_to_dataframe(path) if ext == '.csv' else tdms_to_dataframe(path)
-        # Pass peak_params to the actual calculation logic
-        return calculate_mean_power(df, gain, req, peak_params=peak_params)
-    except Exception as e:
-        print(f"Error in mean power calculation: {e}")
-        return 0.0
-
-
-def calculate_peak_power_from_file(path: str, ext: str, gain: float, req: float, peak_params: dict = None) -> float:
-    """Wrapper that now accepts peak_params."""
-    try:
-        df = csv_to_dataframe(path) if ext == '.csv' else tdms_to_dataframe(path)
-        # Pass peak_params to the actual calculation logic
-        return calculate_peak_power(df, gain, req, peak_params=peak_params)
-    except Exception as e:
-        print(f"Error in peak power calculation: {e}")
-        return 0.0
-
-
-def calculate_mean_vpp_from_file(path: str, ext: str, gain: float, peak_params: dict = None) -> float:
-    """Wrapper that now accepts peak_params."""
-    try:
-        df = csv_to_dataframe(path) if ext == '.csv' else tdms_to_dataframe(path)
-        return calculate_mean_vpp(df, gain, peak_params=peak_params)
-    except Exception:
-        return 0.0
-
-
 # --- PLOTTING ---
 
-def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_percent: int = 80,
+def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', downsample_percent: int = 80,
                      gain: float = None, plot_mode: str = 'voltage', req: float = None,
                      peak_params: dict = None) -> str: # <--- Añadido peak_params
     if not HAS_PLOTLY:
         raise RuntimeError('plotly library is not installed')
 
     if gain is not None:
-        df = apply_gain_to_dataframe(df, gain)
+        df = apply_gain_to_dataframe(df, exp_path, gain)
 
     if plot_mode == 'power':
         if req is None:
@@ -353,12 +335,11 @@ def create_plot_html(df: pd.DataFrame, title: str = 'Data Plot', downsample_perc
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 
-def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=100, gain=None):
+def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=100, gain=None):
     if not HAS_PLOTLY:
         raise RuntimeError('plotly library is not installed')
 
-    if gain is not None:
-        daq_df = apply_gain_to_dataframe(daq_df, gain)
+    exp_df = apply_gain_to_dataframe(exp_df, exp_path, gain)
 
     def find_col(df, keywords):
         for col in df.columns:
@@ -366,17 +347,17 @@ def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=1
                 return col
         return None
 
-    v_col = find_col(daq_df, ['input 0', 'voltage'])
-    p_col = find_col(motor_df, ['position', 'actual position'])
-    f_col = find_col(motor_df, ['force', 'measured force'])
+    v_col = find_col(exp_df, ['input 0', 'voltage'])
+    p_col = find_col(exp_df, ['position', 'actual position'])
+    f_col = find_col(exp_df, ['force', 'measured force'])
 
-    d_time = daq_df['Time(s)'] if 'Time(s)' in daq_df.columns else np.arange(len(daq_df))
+    d_time = exp_df['Time'] if 'Time' in exp_df.columns else np.arange(len(exp_df))
 
-    if 'Time(s)' in motor_df.columns:
-        m_time = motor_df['Time(s)']
+    if 'Time' in exp_df.columns:
+        m_time = exp_df['Time']
     else:
         duration = d_time.max() if len(d_time) > 0 else 1
-        m_time = np.linspace(0, duration, len(motor_df))
+        m_time = np.linspace(0, duration, len(exp_df))
 
     fig = make_subplots(
         rows=3, cols=1,
@@ -386,11 +367,11 @@ def create_combined_motor_daq_plot(daq_df, motor_df, title, downsample_percent=1
     )
 
     if v_col:
-        fig.add_trace(go.Scatter(x=d_time, y=daq_df[v_col], name="Voltage", line=dict(color='blue')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=d_time, y=exp_df[v_col], name="Voltage", line=dict(color='blue')), row=1, col=1)
     if p_col:
-        fig.add_trace(go.Scatter(x=m_time, y=motor_df[p_col], name="Position", line=dict(color='orange')), row=2, col=1)
+        fig.add_trace(go.Scatter(x=m_time, y=exp_df[p_col], name="Position", line=dict(color='orange')), row=2, col=1)
     if f_col:
-        fig.add_trace(go.Scatter(x=m_time, y=motor_df[f_col], name="Force", line=dict(color='green')), row=3, col=1)
+        fig.add_trace(go.Scatter(x=m_time, y=exp_df[f_col], name="Force", line=dict(color='green')), row=3, col=1)
 
     fig.update_layout(
         title=title, height=900, template="plotly_white",

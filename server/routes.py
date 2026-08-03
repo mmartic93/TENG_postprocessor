@@ -2,6 +2,7 @@ import os
 from flask import render_template, request, redirect, url_for, session, flash, send_file
 from werkzeug.utils import secure_filename
 from data_processing.LoadData import ExtractCycles
+from data_processing.preview_service import create_combined_motor_daq_plot
 import pandas as pd
 
 from server.config import UPLOAD_FOLDER, MAX_PREVIEW_ROWS
@@ -148,6 +149,7 @@ def register_routes(app):
 
             # Create the base entry first
             entry = {
+                'experiment_rel': exp_path,
                 'RloadId': experiment.get('RloadId', ''),
                 'TribuId': experiment.get('TribuId', ''),
                 'SampleIdTriboNeg': experiment.get('SampleIdTriboNeg', ''),
@@ -180,15 +182,15 @@ def register_routes(app):
             try:
                 # IMPORTANT: Pass saved_params to all calculation functions
                 entry['mean_power'] = calculate_mean_power(
-                    dfData_all, float(entry['gain']), float(entry['req']),
+                    dfData_all, exp_path, float(entry['gain']), float(entry['req']),
                     peak_params=saved_params  # <--- Pass here
                 )
                 entry['peak_power'] = calculate_peak_power(
-                    dfData_all, float(entry['gain']), float(entry['req']),
+                    dfData_all, exp_path, float(entry['gain']), float(entry['req']),
                     peak_params=saved_params  # <--- Pass here
                 )
                 entry['mean_vpp'] = calculate_mean_vpp(
-                    dfData_all, float(entry['gain']),
+                    dfData_all, exp_path, float(entry['gain']),
                     peak_params=saved_params  # <--- Pass here
                 )
             except Exception as error:
@@ -298,21 +300,16 @@ def register_routes(app):
         )
 
     @app.route('/view')
-    def view_file():
+    def view_experiment():
         metadata_path = session.get('metadata_path')
-        rel = request.args.get('rel')  # This is the primary file clicked (Motor)
-        if rel:
-            rel = rel.replace('//', '/').replace('\\\\', '\\')
-        daq_rel = request.args.get('daq_rel')  # Passed from the template for combined view
-        if daq_rel:
-            daq_rel = daq_rel.replace('//', '/').replace('\\\\', '\\')
+        exp_path = request.args.get('rel')  # This is the primary file clicked (Motor)
+        if exp_path:
+            exp_path = exp_path.replace('//', '/').replace('\\\\', '\\')
         downsample_percent = int(request.args.get('downsample', 80))
 
-        if not metadata_path or not rel:
+        if not metadata_path or not exp_path:
             flash('Missing parameters')
             return redirect(url_for('index'))
-
-        meta_dir = os.path.dirname(metadata_path)
 
         # 1. Get the identifiers from the URL
         TribuId = request.args.get('TribuId', 'Unknown')
@@ -358,15 +355,13 @@ def register_routes(app):
         # This ensures that even if url_params is empty, we get the history
         final_peak_params = {'cutoff': 0.1}  # Default fallback
         final_peak_params.update(session['peak_params_store'].get(graph_key, {}))
-
         try:
-            target = resolve_relative_path(meta_dir, rel)
-            if not file_exists(target):
-                flash(f'File not found: {target}')
+            Cycles_list = ExtractCycles(exp_path)
+            if len(Cycles_list) == 0:
+                flash(f'Error Cycles list is empty')
                 return redirect(url_for('list_files'))
 
-            _, ext = os.path.splitext(target)
-            ext = ext.lower()
+            dfData_all = pd.concat(Cycles_list, ignore_index=True)
 
             gain_value = request.args.get('gain', '').strip()
             gain = float(gain_value) if gain_value else None
@@ -374,65 +369,35 @@ def register_routes(app):
             req = float(req_value) if req_value else None
 
             plot_mode = request.args.get('plot_mode', 'voltage')
-
-            if ext == '.csv':
-                df = csv_to_dataframe(target)
-            elif ext == '.tdms':
-                if not has_tdms_support():
-                    flash('nptdms library not installed')
-                    return redirect(url_for('list_files'))
-                df = tdms_to_dataframe(target)
-            else:
-                flash(f'Unsupported file type: {ext}')
-                return redirect(url_for('list_files'))
-
-            if daq_rel:
-                try:
-                    daq_abs = resolve_relative_path(meta_dir, daq_rel)
-                    _, daq_ext = os.path.splitext(daq_abs)
-                    daq_ext = daq_ext.lower()
-
-                    if daq_ext == '.csv':
-                        daq_df = csv_to_dataframe(daq_abs)
-                    elif daq_ext == '.tdms':
-                        daq_df = tdms_to_dataframe(daq_abs)
-                    else:
-                        raise ValueError(f"Unsupported DAQ extension: {daq_ext}")
-
-                    from data_processing.preview_service import create_combined_motor_daq_plot
-                    plot_html = create_combined_motor_daq_plot(
-                        daq_df=daq_df,
-                        motor_df=df,
-                        title=f"Combined Analysis: {rel}",
-                        downsample_percent=downsample_percent,
-                        gain=gain
-                    )
-                except Exception as e:
-                    flash(f"Could not load associated voltage file: {e}")
-                    plot_html = create_plot_html(df, f"Motor Data: {rel}", downsample_percent,
-                                                 peak_params=final_peak_params)
-            else:
-                # PASAR peak_params A create_plot_html
-                plot_html = create_plot_html(df, f"{ext.upper()} : {rel}", downsample_percent, gain=gain,
-                                             plot_mode=plot_mode, req=req, peak_params=final_peak_params)
+            try:
+                plot_html = create_combined_motor_daq_plot(
+                    exp_path=exp_path,
+                    exp_df=dfData_all,
+                    title=f"Combined Analysis: {exp_path}",
+                    downsample_percent=downsample_percent,
+                    gain=gain
+                )
+            except Exception as e:
+                flash(f"Could not load associated voltage file: {e}")
+                plot_html = create_plot_html(dfData_all, exp_path, f"Motor Data: {exp_path}", downsample_percent,
+                                             peak_params=final_peak_params)
 
             mean_power = None
             if plot_mode == 'power' and gain is not None and req is not None:
-                # Aquí también podrías pasar peak_params si calculate_mean_power_from_file lo requiere
-                mean_power = calculate_mean_power_from_file(target, ext, gain, req, peak_params=final_peak_params)
+                # Aquí también podrías pasar peak_params si calculate_mean_power lo requiere
+                mean_power = calculate_mean_power(target, ext, gain, req, peak_params=final_peak_params)
 
-            df_info = f'{len(df)} rows × {len(df.columns)} columns'
+            df_info = f'{len(dfData_all)} rows × {len(dfData_all.columns)} columns'
             return render_template(
                 'plot_view.html',
                 plot=plot_html,
-                filename=rel,
+                filename=exp_path,
                 df_info=df_info,
                 downsample_percent=downsample_percent,
                 gain_display=gain_value,
                 plot_mode=plot_mode,
                 req_display=req_value,
                 mean_power=mean_power,
-                daq_rel=daq_rel,
                 peak_params=final_peak_params  # PASAR A LA PLANTILLA
             )
         except Exception as error:
