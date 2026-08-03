@@ -4,6 +4,7 @@ from werkzeug.utils import secure_filename
 from data_processing.LoadData import ExtractCycles
 from data_processing.preview_service import create_combined_motor_daq_plot
 import pandas as pd
+import numpy as np
 
 from server.config import UPLOAD_FOLDER, MAX_PREVIEW_ROWS
 from data_processing.file_resolver import resolve_relative_path, file_exists, normalize_display_path
@@ -20,14 +21,16 @@ from data_processing.metadata_loader import (
     lookup_load_info,
 )
 from data_processing.preview_service import (
-    csv_to_dataframe,
     create_plot_html,
     create_mean_power_vs_req_plot,
     calculate_mean_power,
     calculate_peak_power,
     calculate_mean_vpp,
     has_tdms_support,
-    has_plotly_support,
+    create_no_ra_plot,
+    get_plateau_peaks,
+    get_signal_peaks,
+    create_comparison_summary_plot
 )
 from data_processing.validators import validate_tribuid
 
@@ -158,8 +161,6 @@ def register_routes(app):
                 'mean_power': None,
                 'peak_power': None,
                 'mean_vpp': None,
-                'daq_rel': None,
-                'motor_rel': None
             }
 
             # 2. Get Req and Gain (needed for the key)
@@ -385,7 +386,7 @@ def register_routes(app):
             mean_power = None
             if plot_mode == 'power' and gain is not None and req is not None:
                 # Aquí también podrías pasar peak_params si calculate_mean_power lo requiere
-                mean_power = calculate_mean_power(target, ext, gain, req, peak_params=final_peak_params)
+                mean_power = calculate_mean_power(dfData_all, exp_path, gain, req, peak_params=final_peak_params)
 
             df_info = f'{len(dfData_all)} rows × {len(dfData_all.columns)} columns'
             return render_template(
@@ -420,15 +421,6 @@ def register_routes(app):
             return redirect(url_for('index'))
 
         try:
-            import pandas as pd
-            import numpy as np  # Added to ensure np is available for prominence
-            from data_processing.preview_service import (
-                create_no_ra_plot,
-                get_plateau_peaks,
-                get_signal_peaks,
-                create_comparison_summary_plot
-            )
-
             voc_data, isc_data = [], []
             voc_summary_stats, isc_summary_stats = [], []
 

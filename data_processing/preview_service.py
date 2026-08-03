@@ -71,7 +71,7 @@ def tdms_to_dataframe(path: str) -> pd.DataFrame:
 
     length = len(data)
     time_s = np.arange(length) * dt
-    df = pd.DataFrame({'Input 0': data, 'Time(s)': time_s})
+    df = pd.DataFrame({'Input 0': data, 'Time': time_s})
     return df
 
 
@@ -105,13 +105,20 @@ def calculate_power_dataframe(df: pd.DataFrame, req: float) -> pd.DataFrame:
         raise ValueError('Invalid Req value for power calculation')
     plot_columns = [col for col in df.columns if col.lower() != 'index' and pd.api.types.is_numeric_dtype(df[col])]
     if not plot_columns:
-        raise ValueError('No numeric voltage column found for power calculation')
+        raise ValueError('No numeric columns found for power calculation')
 
-    primary = plot_columns[0]
+    primary = None
+    for column in plot_columns:
+        if column.lower() == "voltage":
+            primary = column
+            break
+    if not primary:
+        raise Exception("Voltage column not found")
+
     power_series = df[primary].astype(float) ** 2 / req
     new_df = pd.DataFrame({'Power': power_series})
-    if 'Time(s)' in df.columns:
-        new_df['Time(s)'] = df['Time(s)'].values
+    if 'Time' in df.columns:
+        new_df['Time'] = df['Time'].values
     return new_df
 
 
@@ -225,18 +232,26 @@ def get_plateau_peaks(y_vals, threshold_percentile=80, cutoff=0.05):
 
 def calculate_mean_vpp(df: pd.DataFrame, exp_path: str, gain: float, peak_params: dict = None) -> float:
     df_gain = apply_gain_to_dataframe(df, exp_path, gain)
-    time_col = 'Time(s)' if 'Time(s)' in df_gain.columns else None
+    time_col = 'Time' if 'Time' in df_gain.columns else None
     plot_columns = [col for col in df_gain.columns if col.lower() != 'index' and col != time_col]
 
     if not plot_columns:
         return 0.0
 
-    raw_y = df_gain[plot_columns[0]].values
+    primary = None
+    for column in plot_columns:
+        if column.lower() == "voltage":
+            primary = column
+            break
+    if not primary:
+        raise Exception("Voltage column not found")
+
+    raw_y = df_gain[primary].values
     _, _, _, _, vpp = get_signal_peaks(raw_y)
     return vpp
 
 
-def calculate_mean_power(df: pd.DataFrame, gain: float, exp_path: str, req: float, peak_params: dict = None) -> float:
+def calculate_mean_power(df: pd.DataFrame, exp_path: str, gain: float, req: float, peak_params: dict = None) -> float:
     if gain is None or req is None or req == 0:
         return 0.0
     df_gain = apply_gain_to_dataframe(df, exp_path, gain)
@@ -244,7 +259,7 @@ def calculate_mean_power(df: pd.DataFrame, gain: float, exp_path: str, req: floa
     return float(power_df['Power'].mean())
 
 
-def calculate_peak_power(df: pd.DataFrame, gain: float, exp_path: str, req: float, peak_params: dict = None) -> float:
+def calculate_peak_power(df: pd.DataFrame, exp_path: str, gain: float, req: float, peak_params: dict = None) -> float:
     """Calculates average peak power over the last 10 cycles."""
     if gain is None or req is None or req == 0:
         return 0.0
