@@ -426,7 +426,7 @@ def register_routes(app):
 
             for f in voc_files:
                 if f.filename:
-                    df = pd.read_csv(f)
+                    df = pd.read_excel(f)
                     voc_data.append({'name': f.filename, 'df': df})
                     # Attempt to find the voltage column by name first, then by index
                     y_vals = df.iloc[:, 1].values
@@ -435,7 +435,7 @@ def register_routes(app):
 
             for f in isc_files:
                 if f.filename:
-                    df = pd.read_csv(f)
+                    df = pd.read_excel(f)
                     isc_data.append({'name': f.filename, 'df': df})
                     y_vals = df.iloc[:, 1].values
                     # Ensure we use a safe prominence calculation
