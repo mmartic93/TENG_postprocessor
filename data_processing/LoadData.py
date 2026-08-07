@@ -195,8 +195,8 @@ def LoadDAQData(ExpPath):
     })
 
     # Corrections Voltage (find the starting point of motor movement and reference voltage from this point)
-    j = dfDaq['Bool1'].eq(1).idxmax()
-    dfDaq['Voltage'] -= dfDaq['Voltage'][:j].mean()
+    # j = dfDaq['Bool1'].eq(1).idxmax()
+    # dfDaq['Voltage'] -= dfDaq['Voltage'][:j].mean()
     
     return dfDaq
 
