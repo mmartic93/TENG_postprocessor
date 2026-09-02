@@ -146,7 +146,7 @@ def register_routes(app):
         for experiment in experiment_folders:
 
             # Check if R Load is missing in LoadsDescription
-            if loads_info_df:
+            if loads_info_df is not None:
                 rload_id = experiment.get('RloadId', '')
                 load_info = lookup_load_info(loads_info_df, rload_id)
                 if load_info['missing']:
