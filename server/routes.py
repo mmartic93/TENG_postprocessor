@@ -144,6 +144,15 @@ def register_routes(app):
         param_store = session.get('peak_params_store', {})
 
         for experiment in experiment_folders:
+
+            # Check if R Load is missing in LoadsDescription
+            if loads_info_df:
+                rload_id = experiment.get('RloadId', '')
+                load_info = lookup_load_info(loads_info_df, rload_id)
+                if load_info['missing']:
+                    flash(f"Warning: RloadId '{rload_id}' not found in LoadsDescription. Ignoring this experiment.")
+                    continue
+
             exp_path = experiment.get('exp_path', '')
             Cycles_list = ExtractCycles(exp_path)
             if len(Cycles_list) == 0:
@@ -455,7 +464,7 @@ def register_routes(app):
                 df_info=f"{len(voc_files)} Voc, {len(isc_files)} Isc",
                 downsample_percent=100,
                 plot_mode='No Ra Summary',
-                gain_display=None, req_display=None, mean_power=None
+                gain_display=None, req_display=None, mean_power=None, peak_params=None
             )
         except Exception as e:
             print(f"DEBUG ERROR: {str(e)}")  # This will print the exact error to your terminal
