@@ -53,6 +53,22 @@
                 {{ f.RloadId or '—' }}
                 {% if f.rload_missing %}
                   <br/><em style="color: red;">RloadId not found</em>
+                  <br/>
+                  <form method="get" action="{{ url_for('view_experiment') }}" style="margin-top: 6px;">
+                    <input type="hidden" name="TribuId" value="{{ f.TribuId }}">
+                    <input type="hidden" name="rel" value="{{ f.experiment_rel }}">
+                    <input type="hidden" name="downsample" value="{{ downsample_percent }}">
+                    <input type="hidden" name="gain" value="">
+                    <input type="hidden" name="req" value="">
+                    <input type="hidden" name="auto_gain" value="1">
+                    <select name="rload_id" required style="max-width: 140px;">
+                      <option value="" disabled selected>Select RloadId</option>
+                      {% for option in available_rload_ids %}
+                        <option value="{{ option }}">{{ option }}</option>
+                      {% endfor %}
+                    </select>
+                    <button type="submit" style="margin-left: 6px;">View</button>
+                  </form>
                 {% endif %}
                 {% if f.loads_description_error %}
                   <br/><em style="color: red;">{{ f.loads_description_error }}</em>
@@ -61,7 +77,9 @@
               <td>{{ f.req or '—' }}</td>
               <td>{{ f.gain or '—' }}</td>
               <td>
-                  {% if f.mean_power is defined and f.mean_power is not none %}
+                  {% if f.is_oc_sc %}
+                    — <em style="color: #666;">OC/SC</em>
+                  {% elif f.mean_power is defined and f.mean_power is not none %}
                     {{ '%.4g' | format(f.mean_power) }}
                   {% else %}
                     —
@@ -74,13 +92,9 @@
                       <br/><em style="color: red;">{{ f.experiment_error }}</em>
                     {% else %}
                       <br/>
-                      <a href="{{ url_for('view_experiment', TribuId=f.TribuId, rel=f.experiment_rel, downsample=downsample_percent, gain=f.gain, req=f.req, plot_mode='voltage') }}">
-                        <button type="button" style="background:#28a745; color:white; border:none; padding:2px 8px; cursor:pointer; border-radius:3px;">View</button>
-                      </a>
-
-                      {% if f.gain and f.req %}
-                        <a href="{{ url_for('view_experiment', TribuId=f.TribuId, rel=f.experiment_rel, downsample=downsample_percent, gain=f.gain, req=f.req, plot_mode='power') }}">
-                          <button type="button" style="background:#dc3545; color:white; border:none; padding:2px 8px; cursor:pointer; border-radius:3px;">View Power</button>
+                      {% if not f.rload_missing %}
+                        <a href="{{ url_for('view_experiment', TribuId=f.TribuId, rel=f.experiment_rel, downsample=downsample_percent, gain=f.gain, req=f.req, rload_id=f.RloadId) }}">
+                          <button type="button" style="background:#28a745; color:white; border:none; padding:2px 8px; cursor:pointer; border-radius:3px;">View</button>
                         </a>
                       {% endif %}
                     {% endif %}

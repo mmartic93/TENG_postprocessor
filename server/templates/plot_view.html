@@ -28,6 +28,12 @@
         border-radius: 4px; 
         font-size: 0.9rem; 
       }
+      .filter-group input[type="checkbox"] { 
+        padding: 0;
+        border: none;
+        width: auto;
+        margin-right: 6px;
+      }
       
       .btn-update { 
         background-color: #007bff; 
@@ -48,6 +54,8 @@
     </style>
   </head>
   <body>
+    {% set selected = selected_graphs if selected_graphs is defined else ['voltage', 'power', 'position', 'force', 'is_moving', 'up_down'] %}
+    {% set notch = notch_params if notch_params is defined else {'enabled': False, 'frequency_display': '50', 'q_display': '30'} %}
     <div class="header">
       <h1>Visualización de Datos</h1>
       <p>Archivo: <strong>{{ filename }}</strong></p>
@@ -65,29 +73,69 @@
       <div style="display: flex; gap: 40px;">
         <div>
           <p><strong>Info base:</strong> {{ df_info }}</p>
+          {% if rload_id_display %}<p><strong>RloadId:</strong> {{ rload_id_display }}</p>{% endif %}
           {% if gain_display %}<p><strong>Gain:</strong> {{ gain_display }}</p>{% endif %}
           {% if req_display %}<p><strong>Req:</strong> {{ req_display }} &Omega;</p>{% endif %}
+          {% if is_oc_sc %}<p><strong>Mode:</strong> OC/SC raw-data only (power disabled)</p>{% endif %}
+          {% if is_sc %}<p><strong>Primary signal:</strong> Current (SC mode)</p>{% endif %}
         </div>
         <div>
           {% if mean_power is not none %}
             <p><strong>Mean Peak Power:</strong> <span style="color: #d9534f; font-size: 1.1rem;">{{ '%.4g' | format(mean_power) }} W</span></p>
           {% endif %}
-          <p><strong>Modo:</strong> {{ plot_mode | capitalize }}</p>
+          <p><strong>Curvas:</strong> Seleccionables ({{ 'Corriente' if is_sc else 'Voltaje' }}, Potencia, Posición, Fuerza, IsMoving, Up/Down)</p>
         </div>
       </div>
 
       <form method="get" action="{{ url_for('view_experiment') }}">
         <input type="hidden" name="rel" value="{{ filename }}" />
-        <input type="hidden" name="gain" value="{{ gain_display }}" />
         <input type="hidden" name="req" value="{{ req_display }}" />
+        <input type="hidden" name="TribuId" value="{{ tribu_id if tribu_id is defined else '' }}" />
 
         <div class="filter-grid">
           <div class="filter-group">
-            <label for="plot_mode">Visualización</label>
-            <select id="plot_mode" name="plot_mode">
-              <option value="voltage" {% if plot_mode == 'voltage' %}selected{% endif %}>Voltaje (V)</option>
-              <option value="power" {% if plot_mode == 'power' %}selected{% endif %}>Potencia (W)</option>
-            </select>
+            <label for="rload_id">RloadId</label>
+            <input type="text" id="rload_id" name="rload_id" list="rload-options" value="{{ rload_id_display if rload_id_display is defined else '' }}" placeholder="e.g. 100">
+            <datalist id="rload-options">
+              {% if rload_options is defined %}
+                {% for option in rload_options %}
+                  <option value="{{ option }}"></option>
+                {% endfor %}
+              {% endif %}
+            </datalist>
+          </div>
+
+          <div class="filter-group">
+            <label for="gain">Gain</label>
+            <input type="number" step="any" id="gain" name="gain" value="{{ gain_display if gain_display is not none else '' }}" placeholder="e.g. 1000">
+            <label>
+              <input type="hidden" name="auto_gain" value="0">
+              <input type="checkbox" name="auto_gain" value="1" {% if auto_gain is not defined or auto_gain %}checked{% endif %}>
+              Auto gain from RloadId
+            </label>
+          </div>
+
+          <div class="filter-group">
+            <label>Notch Filter (Voltage)</label>
+            <label>
+              <input type="hidden" name="notch_enable" value="0">
+              <input type="checkbox" name="notch_enable" value="1" {% if notch.enabled %}checked{% endif %} {% if is_sc %}disabled{% endif %}>
+              Apply notch filter{% if is_sc %} (disabled in SC mode){% endif %}
+            </label>
+            <label for="notch_freq">Frequency (Hz)</label>
+            <input type="number" step="any" min="0.0001" id="notch_freq" name="notch_freq" value="{{ notch.frequency_display }}">
+            <label for="notch_q">Q factor</label>
+            <input type="number" step="any" min="0.0001" id="notch_q" name="notch_q" value="{{ notch.q_display }}">
+          </div>
+
+          <div class="filter-group">
+            <label>Gráficas incluidas</label>
+            <label><input type="checkbox" name="graphs" value="voltage" {% if 'voltage' in selected %}checked{% endif %}>{{ 'Corriente' if is_sc else 'Voltaje' }}</label>
+            <label><input type="checkbox" name="graphs" value="power" {% if 'power' in selected %}checked{% endif %} {% if is_oc_sc %}disabled{% endif %}>Potencia{% if is_oc_sc %} (disabled for OC/SC){% endif %}</label>
+            <label><input type="checkbox" name="graphs" value="position" {% if 'position' in selected %}checked{% endif %}>Posición</label>
+            <label><input type="checkbox" name="graphs" value="force" {% if 'force' in selected %}checked{% endif %}>Fuerza</label>
+            <label><input type="checkbox" name="graphs" value="is_moving" {% if 'is_moving' in selected %}checked{% endif %}>IsMoving_Bool</label>
+            <label><input type="checkbox" name="graphs" value="up_down" {% if 'up_down' in selected %}checked{% endif %}>Motor_Up_Down_Bool</label>
           </div>
 
           <div class="filter-group">

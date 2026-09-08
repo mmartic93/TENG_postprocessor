@@ -25,29 +25,5 @@
 
     <p><small>Required columns in metadata: TribuId, RloadId, SampleIdTriboNeg, SampleIdTriboPos.</small></p>
 
-    <hr>
-
-    <!-- NEW NO RA ANALYSIS OPTION: Direct loading of VOC and ISC data -->
-<!-- NEW NO RA ANALYSIS OPTION: Multiple File Uploads -->
-    <h1>No Ra Analysis</h1>
-    <p>Hold down <strong>Ctrl</strong> (or <strong>Cmd</strong> on Mac) to select multiple XLSX files.</p>
-
-    <!-- enctype is REQUIRED for file uploads -->
-    <form method="post" action="{{ url_for('no_ra_analysis') }}" enctype="multipart/form-data">
-      <div>
-        <label for="voc_files">Select Open Circuit Voltages (Voc):</label><br/>
-        <!-- type="file" and "multiple" enable the selection window -->
-        <input id="voc_files" name="voc_files" type="file" multiple accept=".xlsx" required />
-      </div>
-      <br>
-      <div>
-        <label for="isc_files">Select Short Circuit Currents (Isc):</label><br/>
-        <input id="isc_files" name="isc_files" type="file" multiple accept=".xlsx" required />
-      </div>
-      <br>
-      <button type="submit" style="background-color: #007bff; color: white; padding: 5px 15px; border: none; border-radius: 3px; cursor: pointer;">
-        Run Multi-File Analysis
-      </button>
-    </form>
   </body>
 </html>

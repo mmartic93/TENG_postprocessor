@@ -1,13 +1,9 @@
 import os
-from flask import render_template, request, redirect, url_for, session, flash, send_file
-from werkzeug.utils import secure_filename
+from flask import render_template, request, redirect, url_for, session, flash
 from data_processing.LoadData import ExtractCycles
 from data_processing.preview_service import create_combined_motor_daq_plot
 import pandas as pd
-import numpy as np
 
-from server.config import UPLOAD_FOLDER, MAX_PREVIEW_ROWS
-from data_processing.file_resolver import resolve_relative_path, file_exists, normalize_display_path
 from data_processing.metadata_loader import (
     allowed_meta,
     parse_metadata_csv,
@@ -26,16 +22,50 @@ from data_processing.preview_service import (
     calculate_mean_power,
     calculate_peak_power,
     calculate_mean_vpp,
-    has_tdms_support,
-    create_no_ra_plot,
-    get_plateau_peaks,
-    get_signal_peaks,
-    create_comparison_summary_plot
+    has_tdms_support
 )
 from data_processing.validators import validate_tribuid
 
+LIST_FILES_CACHE = {}
+EXPERIMENT_DATA_CACHE = {}
+
 
 def register_routes(app):
+    def is_open_short_rload(rload_id: str) -> bool:
+        return str(rload_id or '').strip().upper() in {'OC', 'SC'}
+
+    def is_short_circuit_rload(rload_id: str) -> bool:
+        return str(rload_id or '').strip().upper() == 'SC'
+
+    def get_cached_experiment_data(exp_path: str):
+        cached = EXPERIMENT_DATA_CACHE.get(exp_path)
+        if isinstance(cached, dict) and 'df' in cached:
+            return cached['df'], cached.get('cycle_markers', [])
+        if cached is not None:
+            return cached, []
+
+        Cycles_list = ExtractCycles(exp_path)
+        if len(Cycles_list) == 0:
+            return None, None
+
+        df_data_all = pd.concat(Cycles_list, ignore_index=True)
+        cycle_markers = []
+        offset = 0
+        for cycle_df in Cycles_list[:-1]:
+            offset += len(cycle_df)
+            if offset >= len(df_data_all):
+                break
+            if 'Time' in df_data_all.columns:
+                cycle_markers.append(float(df_data_all.iloc[offset]['Time']))
+            else:
+                cycle_markers.append(float(offset))
+
+        EXPERIMENT_DATA_CACHE[exp_path] = {
+            'df': df_data_all,
+            'cycle_markers': cycle_markers,
+        }
+        return df_data_all, cycle_markers
+
     @app.route('/', methods=['GET', 'POST'])
     def index():
         if request.method == 'POST':
@@ -50,7 +80,7 @@ def register_routes(app):
                 return redirect(request.url)
 
             if not allowed_meta(metadata_path):
-                flash('Unsupported metadata file type (use .csv or .ods)')
+                flash('Unsupported metadata file type (use .csv or .xlsx)')
                 return redirect(request.url)
 
             try:
@@ -64,13 +94,15 @@ def register_routes(app):
 
             session['metadata_path'] = metadata_path
             session.pop('selected_tribuid', None)
+            LIST_FILES_CACHE.clear()
+            EXPERIMENT_DATA_CACHE.clear()
             return redirect(url_for('metadata_preview'))
 
         return render_template('index.html')
 
     @app.route('/metadata', methods=['GET', 'POST'])
     def metadata_preview():
-        metadata_path = session.get('metadata_path')
+        metadata_path = str(session.get('metadata_path'))
         if not metadata_path:
             flash('Upload a metadata CSV first')
             return redirect(url_for('index'))
@@ -82,10 +114,10 @@ def register_routes(app):
             return redirect(url_for('index'))
 
         rows = format_metadata_rows(df)
-        selected_tribuid = session.get('selected_tribuid')
+        selected_tribuid = str(session.get('selected_tribuid'))
 
         if request.method == 'POST':
-            selected = request.form.get('tribuid')
+            selected = str(request.form.get('tribuid'))
             try:
                 selected = validate_tribuid(selected, df)
             except ValueError as error:
@@ -110,9 +142,10 @@ def register_routes(app):
 
     @app.route('/files')
     def list_files():
-        metadata_path = session.get('metadata_path')
-        selected_tribuid = session.get('selected_tribuid')
+        metadata_path = str(session.get('metadata_path'))
+        selected_tribuid = str(session.get('selected_tribuid'))
         downsample_percent = int(request.args.get('downsample', 100))
+        cache_key = f'{metadata_path}::{selected_tribuid}'
 
         if not metadata_path:
             flash('Upload a metadata CSV first')
@@ -121,15 +154,34 @@ def register_routes(app):
             flash('Please choose a TribuId for the sample')
             return redirect(url_for('metadata_preview'))
 
+        cached = LIST_FILES_CACHE.get(cache_key)
+        if cached is not None:
+            return render_template(
+                'view_files.html',
+                files=cached['files'],
+                has_tdms=has_tdms_support(),
+                selected_tribuid=selected_tribuid,
+                file_count=cached['file_count'],
+                downsample_percent=downsample_percent,
+                mean_power_plots=cached['mean_power_plots'],
+                optimal_power_plot=cached['optimal_power_plot'],
+                mean_vpp_plot=cached['mean_vpp_plot'],
+                available_rload_ids=cached['available_rload_ids'],
+            )
+
+        # Load LoadsDescription file
         meta_dir = os.path.dirname(metadata_path)
-        loads_description_error = None
-        loads_info_df = None
         try:
             loads_file = find_loads_description_file(meta_dir)
             loads_info_df = load_loads_description(loads_file)
+            available_rload_ids = sorted(
+                r_id for r_id in loads_info_df['RloadId'].astype(str).str.strip().tolist() if r_id
+            )
         except Exception as error:
-            loads_description_error = str(error)
+            flash(f'Unable to read LoadsDescription file: {error}')
+            return redirect(url_for('metadata_preview'))
 
+        # Extract experiment folders and calculate power metrics
         try:
             df = parse_metadata_csv(metadata_path)
             sample = get_rows_for_tribuid(df, selected_tribuid)
@@ -145,19 +197,14 @@ def register_routes(app):
 
         for experiment in experiment_folders:
 
-            # Check if R Load is missing in LoadsDescription
-            if loads_info_df is not None:
-                rload_id = experiment.get('RloadId', '')
-                load_info = lookup_load_info(loads_info_df, rload_id)
-                if load_info['missing']:
-                    flash(f"Warning: RloadId '{rload_id}' not found in LoadsDescription. Ignoring this experiment.")
-                    continue
+            rload_id = experiment.get('RloadId', '')
+            load_info = lookup_load_info(loads_info_df, rload_id)
+            is_oc_sc = is_open_short_rload(rload_id)
 
             exp_path = experiment.get('exp_path', '')
-            Cycles_list = ExtractCycles(exp_path)
-            if len(Cycles_list) == 0:
+            dfData_all, _ = get_cached_experiment_data(exp_path)
+            if dfData_all is None:
                 raise Exception("Cycles list is empty")
-            dfData_all = pd.concat(Cycles_list, ignore_index=True)
 
             # Create the base entry first
             entry = {
@@ -170,17 +217,18 @@ def register_routes(app):
                 'mean_power': None,
                 'peak_power': None,
                 'mean_vpp': None,
+                'rload_missing': load_info['missing'],
+                'rload_options': available_rload_ids,
+                'is_oc_sc': is_oc_sc,
             }
 
             # 2. Get Req and Gain (needed for the key)
-            if loads_info_df is not None:
-                load_info = lookup_load_info(loads_info_df, experiment.get('RloadId', ''))
+            if not load_info['missing'] and not is_oc_sc:
                 entry['req'] = load_info['Req']
                 entry['gain'] = load_info['Gain']
-                entry['rload_missing'] = load_info['missing']
             else:
-                entry['req'] = '0'
-                entry['gain'] = '1'
+                entry['req'] = ''
+                entry['gain'] = load_info['Gain'] if not load_info['missing'] else ''
 
             # 3. NOW create the graph_key and get saved params
             TribuId = entry['TribuId']
@@ -189,22 +237,23 @@ def register_routes(app):
             saved_params = param_store.get(graph_key, {})
 
             # 4. Use saved_params in calculations
-            try:
-                # IMPORTANT: Pass saved_params to all calculation functions
-                entry['mean_power'] = calculate_mean_power(
-                    dfData_all, exp_path, float(entry['gain']), float(entry['req']),
-                    peak_params=saved_params  # <--- Pass here
-                )
-                entry['peak_power'] = calculate_peak_power(
-                    dfData_all, exp_path, float(entry['gain']), float(entry['req']),
-                    peak_params=saved_params  # <--- Pass here
-                )
-                entry['mean_vpp'] = calculate_mean_vpp(
-                    dfData_all, exp_path, float(entry['gain']),
-                    peak_params=saved_params  # <--- Pass here
-                )
-            except Exception as error:
-                entry['read_error'] = str(error)
+            if not load_info['missing'] and not is_oc_sc:
+                try:
+                    # IMPORTANT: Pass saved_params to all calculation functions
+                    entry['mean_power'] = calculate_mean_power(
+                        dfData_all, exp_path, float(entry['gain']), float(entry['req']),
+                        peak_params=saved_params  # <--- Pass here
+                    )
+                    entry['peak_power'] = calculate_peak_power(
+                        dfData_all, exp_path, float(entry['gain']), float(entry['req']),
+                        peak_params=saved_params  # <--- Pass here
+                    )
+                    entry['mean_vpp'] = calculate_mean_vpp(
+                        dfData_all, exp_path, float(entry['gain']),
+                        peak_params=saved_params  # <--- Pass here
+                    )
+                except Exception as error:
+                    entry['read_error'] = str(error)
 
             file_entries.append(entry)
 
@@ -217,8 +266,11 @@ def register_routes(app):
         for entry in file_entries:
             req = entry.get('req')
             t_id = entry.get('TribuId', 'Unknown')
-            if req:
-                req_val = float(req)
+            if req and not entry.get('is_oc_sc'):
+                try:
+                    req_val = float(req)
+                except ValueError:
+                    continue
                 if entry.get('mean_power') is not None:
                     grouped_power_data[t_id].append((req_val, entry['mean_power']))
                 if entry.get('peak_power') is not None:
@@ -296,6 +348,15 @@ def register_routes(app):
         except Exception as e:
             print(f"Error generando gráficas: {e}")
 
+        LIST_FILES_CACHE[cache_key] = {
+            'files': file_entries,
+            'file_count': len(sample),
+            'mean_power_plots': mean_power_plots,
+            'optimal_power_plot': optimal_power_plot,
+            'mean_vpp_plot': mean_vpp_plot,
+            'available_rload_ids': available_rload_ids,
+        }
+
         return render_template(
             'view_files.html',
             files=file_entries,
@@ -303,15 +364,15 @@ def register_routes(app):
             selected_tribuid=selected_tribuid,
             file_count=len(sample),
             downsample_percent=downsample_percent,
-            loads_description_error=loads_description_error,
             mean_power_plots=mean_power_plots,
             optimal_power_plot=optimal_power_plot,
             mean_vpp_plot=mean_vpp_plot,
+            available_rload_ids=available_rload_ids,
         )
 
     @app.route('/view')
     def view_experiment():
-        metadata_path = session.get('metadata_path')
+        metadata_path = str(session.get('metadata_path'))
         exp_path = request.args.get('rel')  # This is the primary file clicked (Motor)
         if exp_path:
             exp_path = exp_path.replace('//', '/').replace('\\\\', '\\')
@@ -325,6 +386,29 @@ def register_routes(app):
         TribuId = request.args.get('TribuId', 'Unknown')
         req_val = request.args.get('req', '0')
         graph_key = f"{TribuId}_R{req_val}"  # Example: "Tribu123_R1000"
+        default_graphs = ['voltage', 'power', 'position', 'force', 'is_moving', 'up_down']
+        requested_graphs = request.args.getlist('graphs')
+        selected_graphs = [g for g in requested_graphs if g in default_graphs] if requested_graphs else default_graphs
+        if not selected_graphs:
+            selected_graphs = default_graphs
+        auto_gain_values = request.args.getlist('auto_gain')
+        auto_gain = auto_gain_values[-1] == '1' if auto_gain_values else True
+        notch_enable_values = request.args.getlist('notch_enable')
+        notch_enabled = notch_enable_values[-1] == '1' if notch_enable_values else False
+        rload_id_value = request.args.get('rload_id', '').strip()
+        rload_options = []
+
+        loads_info_df = None
+        if metadata_path:
+            try:
+                meta_dir = os.path.dirname(metadata_path)
+                loads_file = find_loads_description_file(meta_dir)
+                loads_info_df = load_loads_description(loads_file)
+                rload_options = sorted(
+                    r_id for r_id in loads_info_df['RloadId'].astype(str).str.strip().tolist() if r_id
+                )
+            except Exception:
+                loads_info_df = None
 
         if 'peak_params_store' not in session:
             session['peak_params_store'] = {}
@@ -366,35 +450,111 @@ def register_routes(app):
         final_peak_params = {'cutoff': 0.1}  # Default fallback
         final_peak_params.update(session['peak_params_store'].get(graph_key, {}))
         try:
-            Cycles_list = ExtractCycles(exp_path)
-            if len(Cycles_list) == 0:
+            dfData_all, cycle_markers = get_cached_experiment_data(exp_path)
+            if dfData_all is None:
                 flash(f'Error Cycles list is empty')
                 return redirect(url_for('list_files'))
 
-            dfData_all = pd.concat(Cycles_list, ignore_index=True)
-
             gain_value = request.args.get('gain', '').strip()
-            gain = float(gain_value) if gain_value else None
             req_value = request.args.get('req', '').strip()
-            req = float(req_value) if req_value else None
+            is_oc_sc = is_open_short_rload(rload_id_value)
+            is_sc = is_short_circuit_rload(rload_id_value)
+            signal_mode = 'current' if is_sc else 'voltage'
 
-            plot_mode = request.args.get('plot_mode', 'voltage')
+            if rload_id_value and loads_info_df is not None and not is_oc_sc:
+                load_info = lookup_load_info(loads_info_df, rload_id_value)
+                if load_info.get('missing'):
+                    flash(f"RloadId '{rload_id_value}' not found in LoadsDescription. Keeping current Req/Gain values.")
+                else:
+                    req_from_load = str(load_info.get('Req', '') or '').strip()
+                    gain_from_load = str(load_info.get('Gain', '') or '').strip()
+                    if req_from_load:
+                        req_value = req_from_load
+                    if auto_gain and gain_from_load:
+                        gain_value = gain_from_load
+
+            try:
+                gain = float(gain_value) if gain_value else None
+            except ValueError:
+                flash(f"Invalid gain value '{gain_value}'.")
+                gain = None
+
+            try:
+                req = float(req_value) if req_value else None
+            except ValueError:
+                flash(f"Invalid Req value '{req_value}'.")
+                req = None
+
+            if is_oc_sc:
+                selected_graphs = [g for g in selected_graphs if g != 'power']
+                if not selected_graphs:
+                    selected_graphs = ['voltage', 'position', 'force', 'is_moving', 'up_down']
+                req = None
+                req_value = ''
+            if is_sc:
+                notch_enabled = False
+
+            notch_freq_value = request.args.get('notch_freq', '').strip()
+            notch_q_value = request.args.get('notch_q', '').strip()
+            try:
+                notch_freq = float(notch_freq_value) if notch_freq_value else 50.0
+                if notch_freq <= 0:
+                    raise ValueError
+            except ValueError:
+                flash(f"Invalid notch frequency '{notch_freq_value}'. Using default 50 Hz.")
+                notch_freq = 50.0
+                notch_freq_value = '50'
+
+            try:
+                notch_q = float(notch_q_value) if notch_q_value else 30.0
+                if notch_q <= 0:
+                    raise ValueError
+            except ValueError:
+                flash(f"Invalid notch Q factor '{notch_q_value}'. Using default 30.")
+                notch_q = 30.0
+                notch_q_value = '30'
+
+            final_notch_params = {
+                'enabled': notch_enabled,
+                'frequency': notch_freq,
+                'q': notch_q,
+                'frequency_display': notch_freq_value if notch_freq_value else '50',
+                'q_display': notch_q_value if notch_q_value else '30'
+            }
+
             try:
                 plot_html = create_combined_motor_daq_plot(
                     exp_path=exp_path,
                     exp_df=dfData_all,
                     title=f"Combined Analysis: {exp_path}",
                     downsample_percent=downsample_percent,
-                    gain=gain
+                    gain=gain,
+                    req=req,
+                    peak_params=final_peak_params,
+                    selected_graphs=selected_graphs,
+                    notch_params=final_notch_params,
+                    signal_mode=signal_mode,
+                    cycle_markers=cycle_markers
                 )
             except Exception as e:
                 flash(f"Could not load associated voltage file: {e}")
-                plot_html = create_plot_html(dfData_all, exp_path, f"Motor Data: {exp_path}", downsample_percent,
-                                             peak_params=final_peak_params)
+                plot_html = create_plot_html(
+                    dfData_all,
+                    exp_path,
+                    f"Motor Data: {exp_path}",
+                    downsample_percent,
+                    gain=gain,
+                    plot_mode='both',
+                    req=req,
+                    peak_params=final_peak_params,
+                    include_graphs=selected_graphs,
+                    notch_params=final_notch_params,
+                    signal_mode=signal_mode,
+                    cycle_markers=cycle_markers
+                )
 
             mean_power = None
-            if plot_mode == 'power' and gain is not None and req is not None:
-                # Aquí también podrías pasar peak_params si calculate_mean_power lo requiere
+            if gain is not None and req is not None and not is_oc_sc:
                 mean_power = calculate_mean_power(dfData_all, exp_path, gain, req, peak_params=final_peak_params)
 
             df_info = f'{len(dfData_all)} rows × {len(dfData_all.columns)} columns'
@@ -405,68 +565,21 @@ def register_routes(app):
                 df_info=df_info,
                 downsample_percent=downsample_percent,
                 gain_display=gain_value,
-                plot_mode=plot_mode,
                 req_display=req_value,
                 mean_power=mean_power,
-                peak_params=final_peak_params  # PASAR A LA PLANTILLA
+                peak_params=final_peak_params,
+                selected_graphs=selected_graphs,
+                tribu_id=TribuId,
+                rload_id_display=rload_id_value,
+                rload_options=rload_options,
+                auto_gain=auto_gain,
+                notch_params=final_notch_params,
+                is_oc_sc=is_oc_sc,
+                is_sc=is_sc
             )
         except Exception as error:
             import traceback
             print("ERROR DETECTADO EN VIEW_FILE:")
-            print(traceback.format_exc())  # Esto imprimirá el error real en tu terminal negra
+            print(traceback.format_exc())
             flash(f'Failed to process file: {error}')
             return redirect(url_for('list_files'))
-
-    @app.route('/no_ra', methods=['POST'])
-    def no_ra_analysis():
-        # DEBUG PRINTS
-        voc_files = request.files.getlist('voc_files')
-        isc_files = request.files.getlist('isc_files')
-        print(f"DEBUG: Received {len(voc_files)} VOC files and {len(isc_files)} ISC files")
-
-        if not voc_files or not voc_files[0].filename:
-            print("DEBUG: VOC files list was empty or first file has no name")
-            flash("Please select at least one VOC file.")
-            return redirect(url_for('index'))
-
-        try:
-            voc_data, isc_data = [], []
-            voc_summary_stats, isc_summary_stats = [], []
-
-            for f in voc_files:
-                if f.filename:
-                    df = pd.read_excel(f)
-                    voc_data.append({'name': f.filename, 'df': df})
-                    # Attempt to find the voltage column by name first, then by index
-                    y_vals = df.iloc[:, 1].values
-                    _, _, m_max, _, _ = get_plateau_peaks(y_vals)
-                    voc_summary_stats.append({'name': f.filename, 'max_v': abs(m_max)})
-
-            for f in isc_files:
-                if f.filename:
-                    df = pd.read_excel(f)
-                    isc_data.append({'name': f.filename, 'df': df})
-                    y_vals = df.iloc[:, 1].values
-                    # Ensure we use a safe prominence calculation
-                    prom = np.std(y_vals) * 3 if len(y_vals) > 0 else 1
-                    isc_params = {'distance': 20, 'prominence': prom}
-                    _, _, _, _, vpp = get_signal_peaks(y_vals, custom_params=isc_params)
-                    isc_summary_stats.append({'name': f.filename, 'vpp_i': vpp})
-
-            individual_plots_html = create_no_ra_plot(voc_data, isc_data, "Multi-File Analysis")
-            comparison_plot_html = create_comparison_summary_plot(voc_summary_stats, isc_summary_stats)
-            combined_html = comparison_plot_html + "<hr>" + individual_plots_html
-
-            return render_template(
-                'plot_view.html',
-                plot=combined_html,
-                filename="No Ra Analysis Results",
-                df_info=f"{len(voc_files)} Voc, {len(isc_files)} Isc",
-                downsample_percent=100,
-                plot_mode='No Ra Summary',
-                gain_display=None, req_display=None, mean_power=None, peak_params=None
-            )
-        except Exception as e:
-            print(f"DEBUG ERROR: {str(e)}")  # This will print the exact error to your terminal
-            flash(f"Error processing files: {e}")
-            return redirect(url_for('index'))

@@ -21,7 +21,7 @@ except Exception:
     HAS_PLOTLY = False
 
 try:
-    from scipy.signal import find_peaks
+    from scipy.signal import find_peaks, iirnotch
 
     HAS_SCIPY = True
 except Exception:
@@ -40,6 +40,38 @@ def apply_lowpass_filter(data: np.ndarray, cutoff: float = 0.9, order: int = 2) 
         return filtfilt(b, a, data)
     except Exception:
         return data
+
+
+def infer_sampling_rate(time_values: np.ndarray) -> float:
+    if time_values is None or len(time_values) < 2:
+        raise ValueError('At least two time samples are required to infer sampling rate')
+    dt = np.diff(time_values.astype(float))
+    dt = dt[np.isfinite(dt) & (dt > 0)]
+    if len(dt) == 0:
+        raise ValueError('Could not infer a valid positive sampling period from time axis')
+    dt_median = float(np.median(dt))
+    if dt_median <= 0:
+        raise ValueError('Invalid sampling period inferred from time axis')
+    return 1.0 / dt_median
+
+
+def apply_notch_filter(data: np.ndarray, fs: float, notch_freq: float = 50.0, quality_factor: float = 30.0) -> np.ndarray:
+    if not HAS_SCIPY:
+        raise RuntimeError('scipy is required for notch filter')
+    if fs <= 0:
+        raise ValueError('Sampling frequency must be > 0')
+    if notch_freq <= 0:
+        raise ValueError('Notch frequency must be > 0')
+    if quality_factor <= 0:
+        raise ValueError('Notch quality factor must be > 0')
+
+    nyquist = fs / 2.0
+    normalized_w0 = notch_freq / nyquist
+    if normalized_w0 <= 0 or normalized_w0 >= 1:
+        raise ValueError(f'Notch frequency must be between 0 and Nyquist ({nyquist:.4g} Hz)')
+
+    b, a = iirnotch(normalized_w0, quality_factor)
+    return filtfilt(b, a, data.astype(float))
 
 
 def csv_to_dataframe(path: str) -> pd.DataFrame:
@@ -120,6 +152,21 @@ def calculate_power_dataframe(df: pd.DataFrame, req: float) -> pd.DataFrame:
     if 'Time' in df.columns:
         new_df['Time'] = df['Time'].values
     return new_df
+
+
+def find_primary_signal_column(df: pd.DataFrame, mode: str = 'voltage') -> str:
+    if mode == 'current':
+        preferred = ['current', 'input 1', 'isc']
+    else:
+        preferred = ['voltage', 'input 0', 'voc']
+
+    for col in df.columns:
+        low = str(col).lower()
+        if any(key in low for key in preferred):
+            return col
+
+    numeric_cols = [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col]) and str(col).lower() != 'time']
+    return numeric_cols[0] if numeric_cols else None
 
 
 # --- CENTRALIZED DETECTION LOGIC ---
@@ -273,7 +320,8 @@ def calculate_peak_power(df: pd.DataFrame, exp_path: str, gain: float, req: floa
 
 def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', downsample_percent: int = 80,
                      gain: float = None, plot_mode: str = 'voltage', req: float = None,
-                     peak_params: dict = None) -> str: # <--- Añadido peak_params
+                     peak_params: dict = None, include_graphs: list = None, notch_params: dict = None,
+                     signal_mode: str = 'voltage', cycle_markers: list = None) -> str:
     if not HAS_PLOTLY:
         raise RuntimeError('plotly library is not installed')
 
@@ -285,14 +333,27 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
             raise ValueError('Req value is required for power plot')
         df = calculate_power_dataframe(df, req)
 
-    time_col = 'Time (s)' if 'Time (s)' in df.columns else None
+    if 'Time (s)' in df.columns:
+        time_col = 'Time (s)'
+    elif 'Time' in df.columns:
+        time_col = 'Time'
+    else:
+        time_col = None
     plot_columns = [col for col in df.columns if col.lower() != 'index' and col != time_col]
-    primary_col = plot_columns[0]
+    signal_col = find_primary_signal_column(df, signal_mode)
+    if signal_col is None:
+        raise ValueError('No numeric signal columns found for plotting')
+    primary_col = signal_col
     raw_y = df[primary_col].values
     analysis_info = None
+    signal_label = 'Current' if signal_mode == 'current' else 'Voltage'
+    signal_unit = 'A' if signal_mode == 'current' else 'V'
 
     # Extraer cutoff si existe en peak_params
     cutoff_val = peak_params.get('cutoff', 0.1) if peak_params else 0.1
+    notch_enabled = bool(notch_params and notch_params.get('enabled'))
+    notch_freq = float(notch_params.get('frequency', 50.0)) if notch_params else 50.0
+    notch_q = float(notch_params.get('q', 30.0)) if notch_params else 30.0
 
     if plot_mode == 'voltage' and HAS_SCIPY:
         p_idx, t_idx, m_max, m_min, vpp = get_signal_peaks(raw_y, custom_params=peak_params, cutoff=cutoff_val)
@@ -325,6 +386,160 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
         df_plot = df
 
     x_values = df_plot[time_col] if time_col else None
+
+    if plot_mode == 'both':
+        selected = set(include_graphs or ['voltage', 'power'])
+        show_voltage = 'voltage' in selected
+        show_power = 'power' in selected
+
+        if downsample_percent < 100:
+            target_size = max(1, int(len(df) * (downsample_percent / 100.0)))
+            indices = np.linspace(0, len(df) - 1, target_size, dtype=int)
+            x_plot = df.iloc[indices][time_col] if time_col else indices
+        else:
+            x_plot = x_values if x_values is not None else np.arange(len(df))
+
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        if signal_col and show_voltage:
+            raw_signal = df[signal_col].astype(float).values
+            y_signal = raw_signal[indices] if downsample_percent < 100 else raw_signal
+            fig.add_trace(
+                go.Scatter(x=x_plot, y=y_signal, mode='lines', name=signal_label, line=dict(color='#1f77b4')),
+                secondary_y=False
+            )
+            if notch_enabled and signal_mode == 'voltage' and time_col:
+                try:
+                    fs_notch = infer_sampling_rate(df[time_col].values)
+                    filtered_signal = apply_notch_filter(raw_signal, fs_notch, notch_freq, notch_q)
+                    y_signal_filtered = filtered_signal[indices] if downsample_percent < 100 else filtered_signal
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_plot, y=y_signal_filtered, mode='lines',
+                            name=f'{signal_label} Notch ({notch_freq:.4g}Hz, Q={notch_q:.4g})',
+                            line=dict(color='#6f42c1', dash='dash')
+                        ),
+                        secondary_y=False
+                    )
+                except (ValueError, RuntimeError) as notch_error:
+                    fig.add_annotation(
+                        x=0.5,
+                        y=0.9,
+                        xref="x domain",
+                        yref="y domain",
+                        text=f"Notch filter unavailable ({notch_error})",
+                        showarrow=False,
+                        font=dict(color="gray")
+                    )
+            elif notch_enabled and signal_mode == 'voltage' and not time_col:
+                fig.add_annotation(
+                    x=0.5,
+                    y=0.9,
+                    xref="x domain",
+                    yref="y domain",
+                    text="Notch filter unavailable (missing time axis)",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
+            if HAS_SCIPY:
+                v_peak_idx, _, _, _, _ = get_signal_peaks(raw_signal, custom_params=peak_params, cutoff=cutoff_val)
+                if v_peak_idx is not None:
+                    x_v_peaks = df.loc[v_peak_idx, time_col] if time_col else v_peak_idx
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_v_peaks,
+                            y=raw_signal[v_peak_idx],
+                            mode='markers',
+                            name=f'{signal_label} Peaks',
+                            marker=dict(color='#1f77b4', size=7, symbol='circle')
+                        ),
+                        secondary_y=False
+                    )
+            if show_power and signal_mode != 'current' and req is not None and req != 0:
+                power_series = (raw_signal ** 2) / req
+                y_power = power_series[indices] if downsample_percent < 100 else power_series
+                fig.add_trace(
+                    go.Scatter(x=x_plot, y=y_power, mode='lines', name='Power', line=dict(color='#d62728')),
+                    secondary_y=True
+                )
+                if HAS_SCIPY:
+                    p_peak_idx, _ = get_power_peaks(power_series, custom_params=peak_params, cutoff=cutoff_val)
+                    if p_peak_idx is not None:
+                        x_p_peaks = df.loc[p_peak_idx, time_col] if time_col else p_peak_idx
+                        fig.add_trace(
+                            go.Scatter(
+                                x=x_p_peaks,
+                                y=power_series[p_peak_idx],
+                                mode='markers',
+                                name='Power Peaks',
+                                marker=dict(color='#d62728', size=7, symbol='diamond')
+                            ),
+                            secondary_y=True
+                        )
+            elif show_power and signal_mode == 'current':
+                fig.add_annotation(
+                    x=0.5,
+                    y=0.5,
+                    xref="x domain",
+                    yref="y domain",
+                    text="Power disabled in SC mode",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
+            elif show_power:
+                fig.add_annotation(
+                    x=0.5,
+                    y=0.5,
+                    xref="x domain",
+                    yref="y domain",
+                    text="Power unavailable (missing Req)",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
+            elif not show_voltage:
+                fig.add_annotation(
+                    x=0.5,
+                    y=0.5,
+                    xref="x domain",
+                    yref="y domain",
+                    text="Voltage curve hidden by selection",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
+        elif plot_columns and show_voltage:
+            primary_fallback = signal_col
+            raw_primary = df[primary_fallback].astype(float).values
+            y_primary = raw_primary[indices] if downsample_percent < 100 else raw_primary
+            fig.add_trace(
+                go.Scatter(x=x_plot, y=y_primary, mode='lines', name=primary_fallback, line=dict(color='#1f77b4')),
+                secondary_y=False
+            )
+            fig.add_annotation(
+                x=0.5,
+                y=0.5,
+                xref="x domain",
+                yref="y domain",
+                text="Voltage column not found; power unavailable",
+                showarrow=False,
+                font=dict(color="gray")
+            )
+        else:
+            fig.add_annotation(
+                x=0.5,
+                y=0.5,
+                xref="x domain",
+                yref="y domain",
+                text="No compatible graph selected for this view",
+                showarrow=False,
+                font=dict(color="gray")
+            )
+
+        fig.update_layout(title=title, xaxis_title=time_col if time_col else 'Index', height=600)
+        fig.update_yaxes(title_text=f'{signal_label} ({signal_unit})', secondary_y=False)
+        fig.update_yaxes(title_text='Power (W)', secondary_y=True)
+        for marker_x in (cycle_markers or []):
+            fig.add_vline(x=marker_x, line_dash='dot', line_color='gray', opacity=0.5)
+        return fig.to_html(include_plotlyjs='cdn', div_id='plot')
+
     fig = go.Figure()
 
     for col in plot_columns:
@@ -346,11 +561,15 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
     x_label = time_col if time_col else 'Index'
     y_label = "Power (W)" if plot_mode == 'power' else "Voltage (V)"
     fig.update_layout(title=title, xaxis_title=x_label, yaxis_title=y_label, height=600)
+    for marker_x in (cycle_markers or []):
+        fig.add_vline(x=marker_x, line_dash='dot', line_color='gray', opacity=0.5)
 
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 
-def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=100, gain=None):
+def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=100, gain=None, req=None, peak_params=None,
+                                   selected_graphs=None, notch_params=None, signal_mode='voltage',
+                                   cycle_markers=None):
     if not HAS_PLOTLY:
         raise RuntimeError('plotly library is not installed')
 
@@ -363,6 +582,7 @@ def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=1
         return None
 
     v_col = find_col(exp_df, ['input 0', 'voltage'])
+    c_col = find_col(exp_df, ['input 1', 'current', 'isc'])
     p_col = find_col(exp_df, ['position', 'actual position'])
     f_col = find_col(exp_df, ['force', 'measured force'])
 
@@ -373,30 +593,219 @@ def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=1
     else:
         duration = d_time.max() if len(d_time) > 0 else 1
         m_time = np.linspace(0, duration, len(exp_df))
+    cutoff_val = peak_params.get('cutoff', 0.1) if peak_params else 0.1
+    notch_enabled = bool(notch_params and notch_params.get('enabled'))
+    notch_freq = float(notch_params.get('frequency', 50.0)) if notch_params else 50.0
+    notch_q = float(notch_params.get('q', 30.0)) if notch_params else 30.0
+    selected = set(selected_graphs or ['voltage', 'power', 'position', 'force', 'is_moving', 'up_down'])
+    primary_col = c_col if signal_mode == 'current' else v_col
+    primary_label = 'Current' if signal_mode == 'current' else 'Voltage'
+    primary_unit = 'A' if signal_mode == 'current' else 'V'
+    moving_col = 'IsMoving_Bool' if 'IsMoving_Bool' in exp_df.columns else None
+    up_down_col = 'Motor_Up_Down_Bool' if 'Motor_Up_Down_Bool' in exp_df.columns else None
+    row_specs = []
+    if 'voltage' in selected:
+        row_specs.append(('voltage', f'{primary_label} ({primary_unit})'))
+    if 'power' in selected:
+        row_specs.append(('power', 'Power (W)'))
+    if 'position' in selected:
+        row_specs.append(('position', 'Position (mm)'))
+    if 'force' in selected:
+        row_specs.append(('force', 'Force (N)'))
+    if 'is_moving' in selected:
+        row_specs.append(('is_moving', 'IsMoving_Bool'))
+    if 'up_down' in selected:
+        row_specs.append(('up_down', 'Motor_Up_Down_Bool'))
+    if not row_specs:
+        raise ValueError('No graphs selected')
 
     fig = make_subplots(
-        rows=3, cols=1,
+        rows=len(row_specs), cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.07,
-        subplot_titles=("Voltage (V)", "Position (mm)", "Force (N)")
+        vertical_spacing=0.06,
+        subplot_titles=tuple(label for _, label in row_specs)
     )
 
-    if v_col:
-        fig.add_trace(go.Scatter(x=d_time, y=exp_df[v_col], name="Voltage", line=dict(color='blue')), row=1, col=1)
-    if p_col:
-        fig.add_trace(go.Scatter(x=m_time, y=exp_df[p_col], name="Position", line=dict(color='orange')), row=2, col=1)
-    if f_col:
-        fig.add_trace(go.Scatter(x=m_time, y=exp_df[f_col], name="Force", line=dict(color='green')), row=3, col=1)
+    primary_signal = exp_df[primary_col].astype(float).values if primary_col else None
+    voltage_signal = exp_df[v_col].astype(float).values if v_col else None
+
+    for row_index, (graph_type, _) in enumerate(row_specs, start=1):
+        axis_suffix = '' if row_index == 1 else str(row_index)
+        if graph_type == 'voltage':
+            if primary_col:
+                fig.add_trace(
+                    go.Scatter(x=d_time, y=primary_signal, name=primary_label, line=dict(color='blue')),
+                    row=row_index, col=1
+                )
+                if notch_enabled and signal_mode == 'voltage' and 'Time' in exp_df.columns:
+                    try:
+                        fs_notch = infer_sampling_rate(exp_df['Time'].values)
+                        filtered_voltage = apply_notch_filter(primary_signal, fs_notch, notch_freq, notch_q)
+                        fig.add_trace(
+                            go.Scatter(
+                                x=d_time,
+                                y=filtered_voltage,
+                                name=f'{primary_label} Notch ({notch_freq:.4g}Hz, Q={notch_q:.4g})',
+                                line=dict(color='#6f42c1', dash='dash')
+                            ),
+                            row=row_index, col=1
+                        )
+                    except (ValueError, RuntimeError) as notch_error:
+                        fig.add_annotation(
+                            x=0.5, y=0.9,
+                            xref=f"x{axis_suffix} domain",
+                            yref=f"y{axis_suffix} domain",
+                            text=f"Notch filter unavailable ({notch_error})",
+                            showarrow=False,
+                            font=dict(color="gray")
+                        )
+                elif notch_enabled and signal_mode == 'voltage' and 'Time' not in exp_df.columns:
+                    fig.add_annotation(
+                        x=0.5, y=0.9,
+                        xref=f"x{axis_suffix} domain",
+                        yref=f"y{axis_suffix} domain",
+                        text="Notch filter unavailable (missing time axis)",
+                        showarrow=False,
+                        font=dict(color="gray")
+                    )
+                if HAS_SCIPY:
+                    v_peak_idx, _, _, _, _ = get_signal_peaks(primary_signal, custom_params=peak_params, cutoff=cutoff_val)
+                    if v_peak_idx is not None:
+                        x_v_peaks = exp_df.loc[v_peak_idx, 'Time'] if 'Time' in exp_df.columns else v_peak_idx
+                        fig.add_trace(
+                            go.Scatter(
+                                x=x_v_peaks,
+                                y=primary_signal[v_peak_idx],
+                                mode='markers',
+                                name=f'{primary_label} Peaks',
+                                marker=dict(color='#1f77b4', size=7, symbol='circle')
+                            ),
+                            row=row_index, col=1
+                        )
+            else:
+                fig.add_annotation(
+                    x=0.5, y=0.5,
+                    xref=f"x{axis_suffix} domain",
+                    yref=f"y{axis_suffix} domain",
+                    text=f"{primary_label} unavailable",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
+            fig.update_yaxes(title_text=primary_unit, row=row_index, col=1)
+
+        elif graph_type == 'power':
+            if signal_mode != 'current' and req is not None and req != 0 and voltage_signal is not None:
+                power_signal = (voltage_signal ** 2) / req
+                fig.add_trace(
+                    go.Scatter(x=d_time, y=power_signal, name="Power", line=dict(color='red')),
+                    row=row_index, col=1
+                )
+                if HAS_SCIPY:
+                    p_peak_idx, _ = get_power_peaks(power_signal, custom_params=peak_params, cutoff=cutoff_val)
+                    if p_peak_idx is not None:
+                        x_p_peaks = exp_df.loc[p_peak_idx, 'Time'] if 'Time' in exp_df.columns else p_peak_idx
+                        fig.add_trace(
+                            go.Scatter(
+                                x=x_p_peaks,
+                                y=power_signal[p_peak_idx],
+                                mode='markers',
+                                name='Power Peaks',
+                                marker=dict(color='#d62728', size=7, symbol='diamond')
+                            ),
+                            row=row_index, col=1
+                        )
+            else:
+                fig.add_annotation(
+                    x=0.5, y=0.5,
+                    xref=f"x{axis_suffix} domain",
+                    yref=f"y{axis_suffix} domain",
+                    text="Power unavailable (missing Req or Voltage)",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
+            fig.update_yaxes(title_text="W", row=row_index, col=1)
+
+        elif graph_type == 'position':
+            if p_col:
+                fig.add_trace(
+                    go.Scatter(x=m_time, y=exp_df[p_col], name="Position", line=dict(color='orange')),
+                    row=row_index, col=1
+                )
+            else:
+                fig.add_annotation(
+                    x=0.5, y=0.5,
+                    xref=f"x{axis_suffix} domain",
+                    yref=f"y{axis_suffix} domain",
+                    text="Position unavailable",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
+            fig.update_yaxes(title_text="mm", row=row_index, col=1)
+
+        elif graph_type == 'force':
+            if f_col:
+                fig.add_trace(
+                    go.Scatter(x=m_time, y=exp_df[f_col], name="Force", line=dict(color='green')),
+                    row=row_index, col=1
+                )
+            else:
+                fig.add_annotation(
+                    x=0.5, y=0.5,
+                    xref=f"x{axis_suffix} domain",
+                    yref=f"y{axis_suffix} domain",
+                    text="Force unavailable",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
+            fig.update_yaxes(title_text="N", row=row_index, col=1)
+
+        elif graph_type == 'is_moving':
+            if moving_col:
+                fig.add_trace(
+                    go.Scatter(
+                        x=d_time, y=exp_df[moving_col].astype(float),
+                        name="IsMoving_Bool", line=dict(color='#9467bd', shape='hv')
+                    ),
+                    row=row_index, col=1
+                )
+            else:
+                fig.add_annotation(
+                    x=0.5, y=0.5,
+                    xref=f"x{axis_suffix} domain",
+                    yref=f"y{axis_suffix} domain",
+                    text="IsMoving_Bool unavailable",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
+            fig.update_yaxes(title_text="bool", row=row_index, col=1)
+
+        elif graph_type == 'up_down':
+            if up_down_col:
+                fig.add_trace(
+                    go.Scatter(
+                        x=d_time, y=exp_df[up_down_col].astype(float),
+                        name="Motor_Up_Down_Bool", line=dict(color='#8c564b', shape='hv')
+                    ),
+                    row=row_index, col=1
+                )
+            else:
+                fig.add_annotation(
+                    x=0.5, y=0.5,
+                    xref=f"x{axis_suffix} domain",
+                    yref=f"y{axis_suffix} domain",
+                    text="Motor_Up_Down_Bool unavailable",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
+            fig.update_yaxes(title_text="bool", row=row_index, col=1)
 
     fig.update_layout(
-        title=title, height=900, template="plotly_white",
-        showlegend=False, hovermode="x unified"
+        title=title, height=max(380, 260 * len(row_specs)),
+        template="plotly_white", showlegend=False, hovermode="x unified"
     )
-
-    fig.update_yaxes(title_text="V", row=1, col=1)
-    fig.update_yaxes(title_text="mm", row=2, col=1)
-    fig.update_yaxes(title_text="N", row=3, col=1)
-    fig.update_xaxes(title_text="Time (s)", row=3, col=1)
+    for marker_x in (cycle_markers or []):
+        fig.add_vline(x=marker_x, line_dash='dot', line_color='gray', opacity=0.45, row='all', col=1)
+    fig.update_xaxes(title_text="Time (s)", row=len(row_specs), col=1)
 
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
