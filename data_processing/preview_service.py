@@ -2,31 +2,10 @@ import pandas as pd
 import numpy as np
 from scipy.signal import butter, filtfilt
 from plotly.subplots import make_subplots
-import plotly.graph_objects as go
-from scipy.ndimage import label
+from typing import Union, List
 import json, os
-
-try:
-    from nptdms import TdmsFile
-
-    HAS_NPTDMS = True
-except Exception:
-    HAS_NPTDMS = False
-
-try:
-    import plotly.graph_objects as go
-
-    HAS_PLOTLY = True
-except Exception:
-    HAS_PLOTLY = False
-
-try:
-    from scipy.signal import find_peaks, iirnotch
-
-    HAS_SCIPY = True
-except Exception:
-    HAS_SCIPY = False
-
+import plotly.graph_objects as go
+from scipy.signal import find_peaks, iirnotch
 
 # --- LOADERS ---
 
@@ -56,8 +35,6 @@ def infer_sampling_rate(time_values: np.ndarray) -> float:
 
 
 def apply_notch_filter(data: np.ndarray, fs: float, notch_freq: float = 50.0, quality_factor: float = 30.0) -> np.ndarray:
-    if not HAS_SCIPY:
-        raise RuntimeError('scipy is required for notch filter')
     if fs <= 0:
         raise ValueError('Sampling frequency must be > 0')
     if notch_freq <= 0:
@@ -74,52 +51,62 @@ def apply_notch_filter(data: np.ndarray, fs: float, notch_freq: float = 50.0, qu
     return filtfilt(b, a, data.astype(float))
 
 
-def csv_to_dataframe(path: str) -> pd.DataFrame:
-    return pd.read_csv(path)
+def _parse_notch_list(value) -> List[float]:
+    if isinstance(value, str):
+        raw_values = [part.strip() for part in value.split(',') if part.strip()]
+    elif isinstance(value, (list, tuple, np.ndarray)):
+        raw_values = [str(part).strip() for part in value if str(part).strip()]
+    else:
+        raw_values = [str(value).strip()] if str(value).strip() else []
+
+    parsed: List[float] = []
+    for raw in raw_values:
+        parsed.append(float(raw))
+    return parsed
 
 
-def tdms_to_dataframe(path: str) -> pd.DataFrame:
-    if not HAS_NPTDMS:
-        raise RuntimeError('nptdms library is not installed')
-    tdms = TdmsFile.read(path)
+def resolve_notch_parameters(notch_params: dict = None) -> tuple[List[float], List[float]]:
+    frequencies = _parse_notch_list(notch_params.get('frequency', 50.0)) if notch_params else [50.0]
+    q_values = _parse_notch_list(notch_params.get('q', 30.0)) if notch_params else [30.0]
 
-    target_channel = None
-    for group in tdms.groups():
-        for channel in group.channels():
-            if channel.name == 'Input 0':
-                target_channel = channel
-                break
-        if target_channel:
-            break
+    if not frequencies:
+        frequencies = [50.0]
+    if not q_values:
+        q_values = [30.0]
 
-    if not target_channel:
-        raise ValueError('TDMS file does not contain "Input 0" channel')
+    if len(q_values) == 1 and len(frequencies) > 1:
+        q_values = q_values * len(frequencies)
+    elif len(q_values) != len(frequencies):
+        raise ValueError('Q factor count must be 1 or equal to frequency count')
 
-    data = target_channel[:]
-    dt = target_channel.properties.get('wf_increment')
-    if dt is None:
-        fs = target_channel.properties.get('sampling_rate', 1000.0)
-        dt = 1.0 / fs
+    for freq in frequencies:
+        if freq <= 0:
+            raise ValueError('Notch frequency must be > 0')
+    for q in q_values:
+        if q <= 0:
+            raise ValueError('Notch quality factor must be > 0')
+    return frequencies, q_values
 
-    length = len(data)
-    time_s = np.arange(length) * dt
-    df = pd.DataFrame({'Input 0': data, 'Time': time_s})
-    return df
+
+def apply_notch_filter_chain(data: np.ndarray, fs: float, notch_params: dict = None) -> tuple[np.ndarray, List[float], List[float]]:
+    frequencies, q_values = resolve_notch_parameters(notch_params)
+    filtered = data.astype(float)
+    for freq, q in zip(frequencies, q_values):
+        filtered = apply_notch_filter(filtered, fs, freq, q)
+    return filtered, frequencies, q_values
 
 
 # --- MATH HELPERS ---
 
 def apply_gain_to_dataframe(df: pd.DataFrame, exp_path, gain: float) -> pd.DataFrame:
     result = df.copy()
-    if gain:
-        # Apply voltage divisor gains
-        for col in result.columns:
-            if col.lower() not in ['voltage', 'current', 'resistance', 'charge']:
-                continue
-            if pd.api.types.is_numeric_dtype(result[col]):
-                result[col] = result[col].astype(float) / gain
 
-    # Apply Keithley 2V range conversion factor
+    # Apply voltage divisor gain
+    if gain:
+        if 'Voltage' in result.columns and pd.api.types.is_numeric_dtype(result['Voltage']):
+            result['Voltage'] = result['Voltage'].astype(float) / gain
+
+    # Apply Analog 2V range conversion factor from Keithley
     json_path = os.path.join(exp_path, "experiment_metadata.json")
     with open(json_path, 'r') as f:
         json_dict = json.load(f)
@@ -154,7 +141,7 @@ def calculate_power_dataframe(df: pd.DataFrame, req: float) -> pd.DataFrame:
     return new_df
 
 
-def find_primary_signal_column(df: pd.DataFrame, mode: str = 'voltage') -> str:
+def find_primary_signal_column(df: pd.DataFrame, mode: str = 'voltage') -> Union[str, None]:
     if mode == 'current':
         preferred = ['current', 'input 1', 'isc']
     else:
@@ -173,8 +160,6 @@ def find_primary_signal_column(df: pd.DataFrame, mode: str = 'voltage') -> str:
 
 def get_signal_peaks(y_raw: np.ndarray, custom_params: dict = None, cutoff: float = 0.1):
     """Shared logic for voltage peak detection with optional custom tuning."""
-    if not HAS_SCIPY:
-        return None, None, 0.0, 0.0, 0.0
 
     # 1. CRITICAL: Extract cutoff from custom_params BEFORE filtering
     if custom_params and custom_params.get('cutoff') is not None:
@@ -211,12 +196,10 @@ def get_signal_peaks(y_raw: np.ndarray, custom_params: dict = None, cutoff: floa
 
 def get_power_peaks(power_raw: np.ndarray, custom_params: dict = None, cutoff: float = 0.1):
     """Detect peaks specifically for power signals with optional custom tuning."""
-    if not HAS_SCIPY:
-        return None, 0.0
 
     y_smooth = apply_lowpass_filter(power_raw, cutoff=cutoff)
 
-    # Parámetros por defecto
+    # Default parameters
     params = {
         'height': np.percentile(y_smooth, 90),
         'prominence': np.std(y_smooth) * 1.5,
@@ -224,10 +207,10 @@ def get_power_peaks(power_raw: np.ndarray, custom_params: dict = None, cutoff: f
     }
 
     if custom_params:
-        # Filtramos Nones y actualizamos
+        # Filter out Nones and update
         params.update({k: v for k, v in custom_params.items() if v is not None})
 
-    # Eliminamos 'cutoff' de params porque find_peaks no lo reconoce
+    # Remove 'cutoff' from params because find_peaks does not accept it
     search_params = {k: v for k, v in params.items() if k != 'cutoff'}
 
     peaks_idx, _ = find_peaks(y_smooth, **search_params)
@@ -322,8 +305,6 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
                      gain: float = None, plot_mode: str = 'voltage', req: float = None,
                      peak_params: dict = None, include_graphs: list = None, notch_params: dict = None,
                      signal_mode: str = 'voltage', cycle_markers: list = None) -> str:
-    if not HAS_PLOTLY:
-        raise RuntimeError('plotly library is not installed')
 
     if gain is not None:
         df = apply_gain_to_dataframe(df, exp_path, gain)
@@ -352,10 +333,10 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
     # Extraer cutoff si existe en peak_params
     cutoff_val = peak_params.get('cutoff', 0.1) if peak_params else 0.1
     notch_enabled = bool(notch_params and notch_params.get('enabled'))
-    notch_freq = float(notch_params.get('frequency', 50.0)) if notch_params else 50.0
-    notch_q = float(notch_params.get('q', 30.0)) if notch_params else 30.0
+    show_raw_signal = bool(notch_params.get('show_raw_signal', True)) if notch_params else True
+    show_filtered_signal = bool(notch_params.get('show_filtered_signal', True)) if notch_params else True
 
-    if plot_mode == 'voltage' and HAS_SCIPY:
+    if plot_mode == 'voltage':
         p_idx, t_idx, m_max, m_min, vpp = get_signal_peaks(raw_y, custom_params=peak_params, cutoff=cutoff_val)
         if p_idx is not None:
             analysis_info = {
@@ -366,7 +347,7 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
                 'lines': [('Max', m_max, 'green'), ('Min', m_min, 'red')],
                 'label': f' | Mean Vpp: {vpp:.3f}V'
             }
-    elif plot_mode == 'power' and HAS_SCIPY:
+    elif plot_mode == 'power':
         p_idx, mean_peak = get_power_peaks(raw_y, custom_params=peak_params, cutoff=cutoff_val)
         if p_idx is not None:
             analysis_info = {
@@ -402,24 +383,31 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         if signal_col and show_voltage:
             raw_signal = df[signal_col].astype(float).values
-            y_signal = raw_signal[indices] if downsample_percent < 100 else raw_signal
-            fig.add_trace(
-                go.Scatter(x=x_plot, y=y_signal, mode='lines', name=signal_label, line=dict(color='#1f77b4')),
-                secondary_y=False
-            )
-            if notch_enabled and signal_mode == 'voltage' and time_col:
+            signal_trace_count = 0
+            if show_raw_signal:
+                y_signal = raw_signal[indices] if downsample_percent < 100 else raw_signal
+                fig.add_trace(
+                    go.Scatter(x=x_plot, y=y_signal, mode='lines', name=signal_label, line=dict(color='#1f77b4')),
+                    secondary_y=False
+                )
+                signal_trace_count += 1
+            if notch_enabled and show_filtered_signal and time_col:
                 try:
                     fs_notch = infer_sampling_rate(df[time_col].values)
-                    filtered_signal = apply_notch_filter(raw_signal, fs_notch, notch_freq, notch_q)
+                    filtered_signal, notch_freqs, notch_qs = apply_notch_filter_chain(raw_signal, fs_notch, notch_params)
                     y_signal_filtered = filtered_signal[indices] if downsample_percent < 100 else filtered_signal
+                    filtered_line = dict(color='#6f42c1')
+                    if show_raw_signal:
+                        filtered_line['dash'] = 'dash'
                     fig.add_trace(
                         go.Scatter(
                             x=x_plot, y=y_signal_filtered, mode='lines',
-                            name=f'{signal_label} Notch ({notch_freq:.4g}Hz, Q={notch_q:.4g})',
-                            line=dict(color='#6f42c1', dash='dash')
+                            name=f'{signal_label} Notch ({len(notch_freqs)} filter(s))',
+                            line=filtered_line
                         ),
                         secondary_y=False
                     )
+                    signal_trace_count += 1
                 except (ValueError, RuntimeError) as notch_error:
                     fig.add_annotation(
                         x=0.5,
@@ -430,7 +418,7 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
                         showarrow=False,
                         font=dict(color="gray")
                     )
-            elif notch_enabled and signal_mode == 'voltage' and not time_col:
+            elif notch_enabled and show_filtered_signal and not time_col:
                 fig.add_annotation(
                     x=0.5,
                     y=0.9,
@@ -440,7 +428,7 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
                     showarrow=False,
                     font=dict(color="gray")
                 )
-            if HAS_SCIPY:
+            if show_raw_signal:
                 v_peak_idx, _, _, _, _ = get_signal_peaks(raw_signal, custom_params=peak_params, cutoff=cutoff_val)
                 if v_peak_idx is not None:
                     x_v_peaks = df.loc[v_peak_idx, time_col] if time_col else v_peak_idx
@@ -454,6 +442,17 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
                         ),
                         secondary_y=False
                     )
+                    signal_trace_count += 1
+            if signal_trace_count == 0:
+                fig.add_annotation(
+                    x=0.5,
+                    y=0.5,
+                    xref="x domain",
+                    yref="y domain",
+                    text="Signal hidden (enable non-filtered and/or filtered signal)",
+                    showarrow=False,
+                    font=dict(color="gray")
+                )
             if show_power and signal_mode != 'current' and req is not None and req != 0:
                 power_series = (raw_signal ** 2) / req
                 y_power = power_series[indices] if downsample_percent < 100 else power_series
@@ -461,20 +460,19 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
                     go.Scatter(x=x_plot, y=y_power, mode='lines', name='Power', line=dict(color='#d62728')),
                     secondary_y=True
                 )
-                if HAS_SCIPY:
-                    p_peak_idx, _ = get_power_peaks(power_series, custom_params=peak_params, cutoff=cutoff_val)
-                    if p_peak_idx is not None:
-                        x_p_peaks = df.loc[p_peak_idx, time_col] if time_col else p_peak_idx
-                        fig.add_trace(
-                            go.Scatter(
-                                x=x_p_peaks,
-                                y=power_series[p_peak_idx],
-                                mode='markers',
-                                name='Power Peaks',
-                                marker=dict(color='#d62728', size=7, symbol='diamond')
-                            ),
-                            secondary_y=True
-                        )
+                p_peak_idx, _ = get_power_peaks(power_series, custom_params=peak_params, cutoff=cutoff_val)
+                if p_peak_idx is not None:
+                    x_p_peaks = df.loc[p_peak_idx, time_col] if time_col else p_peak_idx
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_p_peaks,
+                            y=power_series[p_peak_idx],
+                            mode='markers',
+                            name='Power Peaks',
+                            marker=dict(color='#d62728', size=7, symbol='diamond')
+                        ),
+                        secondary_y=True
+                    )
             elif show_power and signal_mode == 'current':
                 fig.add_annotation(
                     x=0.5,
@@ -570,8 +568,6 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
 def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=100, gain=None, req=None, peak_params=None,
                                    selected_graphs=None, notch_params=None, signal_mode='voltage',
                                    cycle_markers=None):
-    if not HAS_PLOTLY:
-        raise RuntimeError('plotly library is not installed')
 
     exp_df = apply_gain_to_dataframe(exp_df, exp_path, gain)
 
@@ -595,8 +591,8 @@ def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=1
         m_time = np.linspace(0, duration, len(exp_df))
     cutoff_val = peak_params.get('cutoff', 0.1) if peak_params else 0.1
     notch_enabled = bool(notch_params and notch_params.get('enabled'))
-    notch_freq = float(notch_params.get('frequency', 50.0)) if notch_params else 50.0
-    notch_q = float(notch_params.get('q', 30.0)) if notch_params else 30.0
+    show_raw_signal = bool(notch_params.get('show_raw_signal', True)) if notch_params else True
+    show_filtered_signal = bool(notch_params.get('show_filtered_signal', True)) if notch_params else True
     selected = set(selected_graphs or ['voltage', 'power', 'position', 'force', 'is_moving', 'up_down'])
     primary_col = c_col if signal_mode == 'current' else v_col
     primary_label = 'Current' if signal_mode == 'current' else 'Voltage'
@@ -633,23 +629,31 @@ def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=1
         axis_suffix = '' if row_index == 1 else str(row_index)
         if graph_type == 'voltage':
             if primary_col:
-                fig.add_trace(
-                    go.Scatter(x=d_time, y=primary_signal, name=primary_label, line=dict(color='blue')),
-                    row=row_index, col=1
-                )
-                if notch_enabled and signal_mode == 'voltage' and 'Time' in exp_df.columns:
+                traces_added = 0
+                if show_raw_signal:
+                    fig.add_trace(
+                        go.Scatter(x=d_time, y=primary_signal, name=primary_label, line=dict(color='blue')),
+                        row=row_index, col=1
+                    )
+                    traces_added += 1
+
+                if notch_enabled and show_filtered_signal and 'Time' in exp_df.columns:
                     try:
                         fs_notch = infer_sampling_rate(exp_df['Time'].values)
-                        filtered_voltage = apply_notch_filter(primary_signal, fs_notch, notch_freq, notch_q)
+                        filtered_voltage, notch_freqs, notch_qs = apply_notch_filter_chain(primary_signal, fs_notch, notch_params)
+                        filtered_line = dict(color='#6f42c1')
+                        if show_raw_signal:
+                            filtered_line['dash'] = 'dash'
                         fig.add_trace(
                             go.Scatter(
                                 x=d_time,
                                 y=filtered_voltage,
-                                name=f'{primary_label} Notch ({notch_freq:.4g}Hz, Q={notch_q:.4g})',
-                                line=dict(color='#6f42c1', dash='dash')
+                                name=f'{primary_label} Notch ({len(notch_freqs)} filter(s))',
+                                line=filtered_line
                             ),
                             row=row_index, col=1
                         )
+                        traces_added += 1
                     except (ValueError, RuntimeError) as notch_error:
                         fig.add_annotation(
                             x=0.5, y=0.9,
@@ -659,7 +663,7 @@ def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=1
                             showarrow=False,
                             font=dict(color="gray")
                         )
-                elif notch_enabled and signal_mode == 'voltage' and 'Time' not in exp_df.columns:
+                elif notch_enabled and show_filtered_signal and 'Time' not in exp_df.columns:
                     fig.add_annotation(
                         x=0.5, y=0.9,
                         xref=f"x{axis_suffix} domain",
@@ -668,7 +672,7 @@ def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=1
                         showarrow=False,
                         font=dict(color="gray")
                     )
-                if HAS_SCIPY:
+                if show_raw_signal:
                     v_peak_idx, _, _, _, _ = get_signal_peaks(primary_signal, custom_params=peak_params, cutoff=cutoff_val)
                     if v_peak_idx is not None:
                         x_v_peaks = exp_df.loc[v_peak_idx, 'Time'] if 'Time' in exp_df.columns else v_peak_idx
@@ -682,6 +686,16 @@ def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=1
                             ),
                             row=row_index, col=1
                         )
+                        traces_added += 1
+                if traces_added == 0:
+                    fig.add_annotation(
+                        x=0.5, y=0.5,
+                        xref=f"x{axis_suffix} domain",
+                        yref=f"y{axis_suffix} domain",
+                        text="Signal hidden (enable non-filtered and/or filtered signal)",
+                        showarrow=False,
+                        font=dict(color="gray")
+                    )
             else:
                 fig.add_annotation(
                     x=0.5, y=0.5,
@@ -700,20 +714,19 @@ def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=1
                     go.Scatter(x=d_time, y=power_signal, name="Power", line=dict(color='red')),
                     row=row_index, col=1
                 )
-                if HAS_SCIPY:
-                    p_peak_idx, _ = get_power_peaks(power_signal, custom_params=peak_params, cutoff=cutoff_val)
-                    if p_peak_idx is not None:
-                        x_p_peaks = exp_df.loc[p_peak_idx, 'Time'] if 'Time' in exp_df.columns else p_peak_idx
-                        fig.add_trace(
-                            go.Scatter(
-                                x=x_p_peaks,
-                                y=power_signal[p_peak_idx],
-                                mode='markers',
-                                name='Power Peaks',
-                                marker=dict(color='#d62728', size=7, symbol='diamond')
-                            ),
-                            row=row_index, col=1
-                        )
+                p_peak_idx, _ = get_power_peaks(power_signal, custom_params=peak_params, cutoff=cutoff_val)
+                if p_peak_idx is not None:
+                    x_p_peaks = exp_df.loc[p_peak_idx, 'Time'] if 'Time' in exp_df.columns else p_peak_idx
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_p_peaks,
+                            y=power_signal[p_peak_idx],
+                            mode='markers',
+                            name='Power Peaks',
+                            marker=dict(color='#d62728', size=7, symbol='diamond')
+                        ),
+                        row=row_index, col=1
+                    )
             else:
                 fig.add_annotation(
                     x=0.5, y=0.5,
@@ -810,10 +823,202 @@ def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=1
     return fig.to_html(include_plotlyjs='cdn', div_id='plot')
 
 
+def create_signal_fft_plot(exp_df: pd.DataFrame, exp_path: str, gain: float = None,
+                           signal_mode: str = 'voltage', notch_params: dict = None) -> str:
+    df_gain = apply_gain_to_dataframe(exp_df, exp_path, gain)
+    signal_col = find_primary_signal_column(df_gain, signal_mode)
+    signal_label = 'Current' if signal_mode == 'current' else 'Voltage'
+    signal_unit = 'A' if signal_mode == 'current' else 'V'
+
+    if not signal_col:
+        return f'<p>{signal_label} FFT unavailable (signal column not found).</p>'
+    if 'Time' not in df_gain.columns:
+        return f'<p>{signal_label} FFT unavailable (missing time axis).</p>'
+
+    try:
+        fs = infer_sampling_rate(df_gain['Time'].values)
+    except (ValueError, RuntimeError) as error:
+        return f'<p>{signal_label} FFT unavailable ({error}).</p>'
+
+    signal = df_gain[signal_col].astype(float).values
+    signal = signal - np.mean(signal)
+    n = len(signal)
+    if n < 2:
+        return f'<p>{signal_label} FFT unavailable (not enough samples).</p>'
+
+    freqs = np.fft.rfftfreq(n, d=1.0 / fs)
+    amplitude = (2.0 / n) * np.abs(np.fft.rfft(signal))
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=freqs,
+            y=amplitude,
+            mode='lines',
+            name=f'{signal_label} FFT (raw)',
+            line=dict(color='#17a2b8')
+        )
+    )
+    notch_enabled = bool(notch_params and notch_params.get('enabled'))
+    if notch_enabled:
+        try:
+            filtered_signal, notch_freqs, notch_qs = apply_notch_filter_chain(
+                df_gain[signal_col].astype(float).values,
+                fs,
+                notch_params
+            )
+            filtered_signal = filtered_signal - np.mean(filtered_signal)
+            amplitude_filtered = (2.0 / n) * np.abs(np.fft.rfft(filtered_signal))
+            fig.add_trace(
+                go.Scatter(
+                    x=freqs,
+                    y=amplitude_filtered,
+                    mode='lines',
+                    name=f'{signal_label} FFT (notch, {len(notch_freqs)} filter(s))',
+                    line=dict(color='#6f42c1', dash='dash')
+                )
+            )
+        except (ValueError, RuntimeError):
+            pass
+
+    fig.update_layout(
+        title=f'{signal_label} FFT',
+        xaxis_title='Frequency (Hz)',
+        yaxis_title=f'{signal_unit} amplitude',
+        height=500,
+        template='plotly_white',
+        hovermode='x unified',
+        showlegend=True
+    )
+    return fig.to_html(include_plotlyjs='cdn', div_id='fft_plot')
+
+
+def create_cycles_overlay_plot(cycles_list: List[pd.DataFrame], exp_path: str, gain: float = None,
+                               signal_mode: str = 'voltage', cycle_start: int = 1,
+                               cycle_end: int = None, notch_params: dict = None,
+                               show_raw_signal: bool = True, show_filtered_signal: bool = False) -> str:
+    if not cycles_list:
+        return '<p>No cycles available for overlay.</p>'
+    notch_enabled = bool(notch_params and notch_params.get('enabled'))
+    effective_show_filtered = bool(show_filtered_signal and notch_enabled)
+    if not show_raw_signal and not effective_show_filtered:
+        return '<p>Cycle overlay hidden (enable raw and/or filtered signal).</p>'
+
+    total_cycles = len(cycles_list)
+    start_cycle = max(1, int(cycle_start or 1))
+    end_cycle = total_cycles if cycle_end is None else int(cycle_end)
+    end_cycle = min(total_cycles, max(1, end_cycle))
+    if end_cycle < start_cycle:
+        end_cycle = start_cycle
+
+    cycles_to_plot = cycles_list[start_cycle - 1:end_cycle]
+
+    fig = go.Figure()
+    signal_label = 'Current' if signal_mode == 'current' else 'Voltage'
+    signal_unit = 'A' if signal_mode == 'current' else 'V'
+    plotted_cycles = 0
+    notch_unavailable_note = None
+    if show_filtered_signal and not notch_enabled:
+        notch_unavailable_note = 'Filtered overlay unavailable (enable notch filter first)'
+
+    for index, cycle_df in enumerate(cycles_to_plot, start=start_cycle):
+        if cycle_df is None or cycle_df.empty:
+            continue
+        cycle_gain = apply_gain_to_dataframe(cycle_df, exp_path, gain)
+        signal_col = find_primary_signal_column(cycle_gain, signal_mode)
+        if not signal_col:
+            continue
+
+        y_values = cycle_gain[signal_col].astype(float).values
+        if 'Time' in cycle_gain.columns:
+            x_values = cycle_gain['Time'].astype(float).values
+            x_values = x_values - x_values[0] if len(x_values) else x_values
+            x_title = 'Time relative to cycle start (s)'
+        else:
+            x_values = np.arange(len(cycle_gain))
+            x_title = 'Sample index'
+
+        cycle_has_trace = False
+        if show_raw_signal:
+            fig.add_trace(
+                go.Scatter(
+                    x=x_values,
+                    y=y_values,
+                    mode='lines',
+                    name=f'Cycle {index} (raw)',
+                    line=dict(width=1.6, color='#1f77b4'),
+                    opacity=0.3,
+                    showlegend=False
+                )
+            )
+            cycle_has_trace = True
+
+        if effective_show_filtered:
+            if 'Time' not in cycle_gain.columns:
+                notch_unavailable_note = 'Filtered overlay unavailable (missing time axis)'
+            else:
+                try:
+                    fs_notch = infer_sampling_rate(cycle_gain['Time'].astype(float).values)
+                    filtered_signal, _, _ = apply_notch_filter_chain(y_values, fs_notch, notch_params)
+                    filtered_line = dict(width=1.8, color='#6f42c1')
+                    if show_raw_signal:
+                        filtered_line['dash'] = 'dash'
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_values,
+                            y=filtered_signal,
+                            mode='lines',
+                            name=f'Cycle {index} (filtered)',
+                            line=filtered_line,
+                            opacity=0.45 if show_raw_signal else 0.55,
+                            showlegend=False
+                        )
+                    )
+                    cycle_has_trace = True
+                except (ValueError, RuntimeError) as notch_error:
+                    notch_unavailable_note = f'Filtered overlay unavailable ({notch_error})'
+
+        if cycle_has_trace:
+            plotted_cycles += 1
+
+    if plotted_cycles == 0:
+        if notch_unavailable_note:
+            return f'<p>{notch_unavailable_note}.</p>'
+        return f'<p>No {signal_label.lower()} signal found in cycles.</p>'
+
+    if notch_unavailable_note:
+        fig.add_annotation(
+            x=0.5,
+            y=0.98,
+            xref='paper',
+            yref='paper',
+            text=notch_unavailable_note,
+            showarrow=False,
+            font=dict(color='gray')
+        )
+
+    if show_raw_signal and effective_show_filtered:
+        signal_variant = 'raw + filtered (notch)'
+    elif effective_show_filtered:
+        signal_variant = 'filtered (notch)'
+    else:
+        signal_variant = 'raw'
+
+    fig.update_layout(
+        title=f'{signal_label} Cycle Overlay ({signal_variant}, cycles {start_cycle}-{end_cycle}, {plotted_cycles}/{len(cycles_to_plot)} cycles)',
+        xaxis_title=x_title,
+        yaxis_title=f'{signal_label} ({signal_unit})',
+        height=500,
+        template='plotly_white',
+        hovermode='x unified'
+    )
+    return fig.to_html(include_plotlyjs='cdn', div_id='cycles_overlay_plot')
+
+
 def create_mean_power_vs_req_plot(grouped_power: dict, grouped_peak_power: dict = None,
                                   title: str = 'Power Analysis vs Resistance',
                                   div_id: str = 'mean_power_plots') -> str:
-    if not HAS_PLOTLY or not grouped_power:
+    if not grouped_power:
         return '<p>No data available</p>'
 
     # Define explicit colors for clarity
@@ -876,7 +1081,7 @@ def create_mean_power_vs_req_plot(grouped_power: dict, grouped_peak_power: dict 
 
 def create_mean_vpp_vs_req_plot(grouped_data: dict, title: str = 'Mean Vpp vs Resistance') -> str:
     """This function remains untouched, takes a single dict of grouped_data"""
-    if not HAS_PLOTLY or not grouped_data:
+    if not grouped_data:
         return '<p>No data available</p>'
 
     fig = go.Figure()
@@ -891,7 +1096,7 @@ def create_mean_vpp_vs_req_plot(grouped_data: dict, title: str = 'Mean Vpp vs Re
 
 
 def create_optimal_power_plot(optimal_points: list, title: str = 'Optimal Power Comparison across TribuIds') -> str:
-    if not HAS_PLOTLY or not optimal_points:
+    if not optimal_points:
         return ''
 
     from plotly.subplots import make_subplots
@@ -967,134 +1172,10 @@ def create_optimal_power_plot(optimal_points: list, title: str = 'Optimal Power 
     return fig.to_html(include_plotlyjs='cdn', div_id='optimal_power_plot')
 
 
-def create_no_ra_plot(voc_data_list: list, isc_data_list: list, title: str) -> str:
-    """
-    Generates independent graphs for each Voc and Isc file.
-    Includes averaged metrics in the titles and horizontal reference lines.
-    """
-    if not HAS_PLOTLY:
-        return "<p>Plotly not installed</p>"
-
-    html_plots = []
-
-    def find_column(df, possible_names):
-        for col in df.columns:
-            if any(name.lower() in col.lower() for name in possible_names):
-                return col
-        return None
-
-    # ==========================================
-    # Process Multiple VOC Files Independently
-    # ==========================================
-    for item in voc_data_list:
-        df, name = item['df'], item['name']
-        time_col = find_column(df, ['time'])
-        val_col = find_column(df, ['voltage', 'input 0', 'voc'])
-
-        if val_col:
-            x_vals = df[time_col].values if time_col else np.arange(len(df))
-            y_vals = df[val_col].values
-
-            p_idx, _, m_max, _, _ = get_plateau_peaks(y_vals, threshold_percentile=80, cutoff=0.05)
-
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name="Voltage", line=dict(color='#007bff')))
-
-            # Define the title with the averaged value
-            avg_voc_val = abs(m_max)
-            file_title = f"<b>Voc Analysis:</b> {name} | <b>Avg Max:</b> {avg_voc_val:.3g} V"
-
-            if p_idx is not None:
-                # Add markers for plateau
-                fig.add_trace(go.Scatter(
-                    x=x_vals[p_idx], y=y_vals[p_idx], mode='markers',
-                    name='Plateau Points',
-                    marker=dict(size=4, symbol='circle', color='rgba(0,0,0,0.3)')
-                ))
-
-                # Add Horizontal Average Line
-                fig.add_hline(
-                    y=m_max,
-                    line_dash="dash",
-                    line_color="green",
-                    annotation_text=f"Avg: {avg_voc_val:.3g}V",
-                    annotation_position="top left"
-                )
-
-            fig.update_layout(
-                title=file_title,
-                xaxis_title="Time (s)",
-                yaxis_title="Voltage (V)",
-                template="plotly_white",
-                height=450,
-                margin=dict(t=50, b=50),
-                showlegend=True
-            )
-            html_plots.append(fig.to_html(include_plotlyjs=False, full_html=False))
-
-    # ==========================================
-    # Process Multiple ISC Files Independently
-    # ==========================================
-    for item in isc_data_list:
-        df, name = item['df'], item['name']
-        time_col = find_column(df, ['time'])
-        val_col = find_column(df, ['current', 'isc', 'ampere'])
-
-        if val_col:
-            x_vals = df[time_col].values if time_col else np.arange(len(df))
-            y_vals = df[val_col].values
-
-            isc_params = {'distance': 20, 'prominence': np.std(y_vals) * 3}
-            p_idx, t_idx, m_max, m_min, vpp = get_signal_peaks(y_vals, custom_params=isc_params, cutoff=0.3)
-
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=x_vals, y=y_vals, name="Current", line=dict(color='#dc3545')))
-
-            # Define the title with the Pk-Pk value
-            file_title = f"<b>Isc Analysis:</b> {name} | <b>Avg Pk-Pk:</b> {vpp:.3g} A"
-
-            if p_idx is not None and t_idx is not None:
-                fig.add_trace(go.Scatter(
-                    x=x_vals[p_idx], y=y_vals[p_idx], mode='markers',
-                    name='Max Peaks', marker=dict(size=6, symbol='triangle-up', color='green')
-                ))
-                fig.add_trace(go.Scatter(
-                    x=x_vals[t_idx], y=y_vals[t_idx], mode='markers',
-                    name='Min Peaks', marker=dict(size=6, symbol='triangle-down', color='red')
-                ))
-
-                # Add Horizontal Lines for Max and Min Averages
-                fig.add_hline(
-                    y=m_max, line_dash="dash", line_color="green",
-                    annotation_text=f"Max: {m_max:.3g}A", annotation_position="top right"
-                )
-                fig.add_hline(
-                    y=m_min, line_dash="dash", line_color="red",
-                    annotation_text=f"Min: {m_min:.3g}A", annotation_position="bottom right"
-                )
-
-            fig.update_layout(
-                title=file_title,
-                xaxis_title="Time (s)",
-                yaxis_title="Current (A)",
-                template="plotly_white",
-                height=450,
-                margin=dict(t=50, b=50),
-                showlegend=True
-            )
-            html_plots.append(fig.to_html(include_plotlyjs=False, full_html=False))
-
-    if not html_plots:
-        return "<p>No data to plot</p>"
-
-    return "<hr>".join(html_plots)
-
 def create_comparison_summary_plot(voc_results: list, isc_results: list) -> str:
     """
     Creates a bar plot comparing Voc and Isc metrics across filenames.
     """
-    if not HAS_PLOTLY:
-        return ""
 
     from plotly.subplots import make_subplots
     import plotly.graph_objects as go
@@ -1145,8 +1226,3 @@ def create_comparison_summary_plot(voc_results: list, isc_results: list) -> str:
     fig.update_yaxes(title_text="<b>Mean Pk-Pk Isc</b> (A)", secondary_y=True, title_font=dict(color="red"))
 
     return fig.to_html(include_plotlyjs='cdn', div_id='comparison_plot')
-
-def has_tdms_support() -> bool: return HAS_NPTDMS
-
-
-def has_plotly_support() -> bool: return HAS_PLOTLY

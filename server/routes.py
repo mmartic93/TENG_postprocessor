@@ -3,6 +3,8 @@ from flask import render_template, request, redirect, url_for, session, flash
 from data_processing.LoadData import ExtractCycles
 from data_processing.preview_service import create_combined_motor_daq_plot
 import pandas as pd
+import numpy as np
+from collections import defaultdict
 
 from data_processing.metadata_loader import (
     allowed_meta,
@@ -22,7 +24,12 @@ from data_processing.preview_service import (
     calculate_mean_power,
     calculate_peak_power,
     calculate_mean_vpp,
-    has_tdms_support
+    create_cycles_overlay_plot,
+    create_signal_fft_plot,
+    create_comparison_summary_plot,
+    apply_gain_to_dataframe,
+    get_plateau_peaks,
+    get_signal_peaks,
 )
 from data_processing.validators import validate_tribuid
 
@@ -37,7 +44,7 @@ def register_routes(app):
     def is_short_circuit_rload(rload_id: str) -> bool:
         return str(rload_id or '').strip().upper() == 'SC'
 
-    def get_cached_experiment_data(exp_path: str):
+    def load_experiment_data(exp_path: str):
         cached = EXPERIMENT_DATA_CACHE.get(exp_path)
         if isinstance(cached, dict) and 'df' in cached:
             return cached['df'], cached.get('cycle_markers', [])
@@ -63,8 +70,101 @@ def register_routes(app):
         EXPERIMENT_DATA_CACHE[exp_path] = {
             'df': df_data_all,
             'cycle_markers': cycle_markers,
+            'cycles': Cycles_list,
         }
         return df_data_all, cycle_markers
+
+    def load_experiment_cycles(exp_path: str):
+        cached = EXPERIMENT_DATA_CACHE.get(exp_path)
+        if isinstance(cached, dict) and 'cycles' in cached:
+            return cached['cycles']
+        cycles_list = ExtractCycles(exp_path)
+        if isinstance(cached, dict):
+            cached['cycles'] = cycles_list
+            EXPERIMENT_DATA_CACHE[exp_path] = cached
+        else:
+            EXPERIMENT_DATA_CACHE[exp_path] = {'cycles': cycles_list}
+        return cycles_list
+
+    def normalize_cycle_range(total_cycles: int, start_raw, end_raw):
+        if total_cycles <= 0:
+            return 0, 0
+        try:
+            start_cycle = int(str(start_raw).strip()) if str(start_raw).strip() else 1
+        except ValueError:
+            start_cycle = 1
+        try:
+            end_cycle = int(str(end_raw).strip()) if str(end_raw).strip() else total_cycles
+        except ValueError:
+            end_cycle = total_cycles
+        start_cycle = max(1, min(start_cycle, total_cycles))
+        end_cycle = max(1, min(end_cycle, total_cycles))
+        if end_cycle < start_cycle:
+            end_cycle = start_cycle
+        return start_cycle, end_cycle
+
+    def build_cycle_window_dataframe(cycles_list, start_cycle: int, end_cycle: int):
+        if not cycles_list:
+            return None, []
+        if start_cycle < 1 or end_cycle < start_cycle:
+            return None, []
+
+        selected_cycles = cycles_list[start_cycle - 1:end_cycle]
+        if not selected_cycles:
+            return None, []
+
+        df_data = pd.concat(selected_cycles, ignore_index=True)
+        cycle_markers = []
+        offset = 0
+        for cycle_df in selected_cycles[:-1]:
+            offset += len(cycle_df)
+            if offset >= len(df_data):
+                break
+            if 'Time' in df_data.columns:
+                cycle_markers.append(float(df_data.iloc[offset]['Time']))
+            else:
+                cycle_markers.append(float(offset))
+        return df_data, cycle_markers
+
+    def parse_notch_csv_values(raw_value: str, field_label: str) -> list[float]:
+        parts = [part.strip() for part in str(raw_value).split(',') if part.strip()]
+        if not parts:
+            return []
+        values = []
+        for part in parts:
+            try:
+                value = float(part)
+            except ValueError:
+                raise ValueError(f'Invalid {field_label} value "{part}"')
+            if value <= 0:
+                raise ValueError(f'{field_label} values must be > 0')
+            values.append(value)
+        return values
+
+    def get_experiment_overrides():
+        return session.get('experiment_overrides', {})
+
+    def save_experiment_override(exp_path: str, override: dict):
+        overrides = session.get('experiment_overrides', {})
+        previous = overrides.get(exp_path, {})
+        merged = dict(previous)
+        merged.update(override)
+        if previous != merged:
+            overrides[exp_path] = merged
+            session['experiment_overrides'] = overrides
+            LIST_FILES_CACHE.clear()
+
+    def as_bool(value, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {'1', 'true', 'yes', 'on'}:
+            return True
+        if text in {'0', 'false', 'no', 'off'}:
+            return False
+        return default
 
     @app.route('/', methods=['GET', 'POST'])
     def index():
@@ -94,6 +194,7 @@ def register_routes(app):
 
             session['metadata_path'] = metadata_path
             session.pop('selected_tribuid', None)
+            session.pop('experiment_overrides', None)
             LIST_FILES_CACHE.clear()
             EXPERIMENT_DATA_CACHE.clear()
             return redirect(url_for('metadata_preview'))
@@ -115,9 +216,12 @@ def register_routes(app):
 
         rows = format_metadata_rows(df)
         selected_tribuid = str(session.get('selected_tribuid'))
+        unique_tribuids = list(dict.fromkeys(df['TribuId'].astype(str).str.strip().tolist()))
+        selected_tribuids = [value.strip() for value in selected_tribuid.split(',') if value.strip()]
 
         if request.method == 'POST':
-            selected = str(request.form.get('tribuid'))
+            selected_values = [value.strip() for value in request.form.getlist('tribuid') if value.strip()]
+            selected = ', '.join(selected_values)
             try:
                 selected = validate_tribuid(selected, df)
             except ValueError as error:
@@ -125,18 +229,22 @@ def register_routes(app):
                 return render_template(
                     'metadata_preview.html',
                     rows=rows,
-                    selected_tribuid=request.form.get('tribuid'),
+                    selected_tribuid=selected,
+                    selected_tribuids=selected_values,
+                    tribuid_options=unique_tribuids,
                     required_columns=get_required_columns(),
                 )
 
             session['selected_tribuid'] = selected
-            flash(f'Selected TribuId {selected}')
+            flash(f'Selected TribuId(s): {selected}', 'success')
             return redirect(url_for('list_files'))
 
         return render_template(
             'metadata_preview.html',
             rows=rows,
             selected_tribuid=selected_tribuid,
+            selected_tribuids=selected_tribuids,
+            tribuid_options=unique_tribuids,
             required_columns=get_required_columns(),
         )
 
@@ -145,7 +253,9 @@ def register_routes(app):
         metadata_path = str(session.get('metadata_path'))
         selected_tribuid = str(session.get('selected_tribuid'))
         downsample_percent = int(request.args.get('downsample', 100))
-        cache_key = f'{metadata_path}::{selected_tribuid}'
+        selected_oc_exp = request.args.get('selected_oc_exp', '').strip()
+        selected_sc_exp = request.args.get('selected_sc_exp', '').strip()
+        cache_key = f'{metadata_path}::{selected_tribuid}::{selected_oc_exp}::{selected_sc_exp}'
 
         if not metadata_path:
             flash('Upload a metadata CSV first')
@@ -154,18 +264,63 @@ def register_routes(app):
             flash('Please choose a TribuId for the sample')
             return redirect(url_for('metadata_preview'))
 
+        if request.args.get('action') == 'update_metrics':
+            rel_values = request.args.getlist('rel')
+            rload_values = request.args.getlist('rload_id')
+            gain_values = request.args.getlist('gain')
+            req_values = request.args.getlist('req')
+            auto_gain_values = request.args.getlist('auto_gain')
+            overlay_start_values = request.args.getlist('overlay_cycle_start')
+            overlay_end_values = request.args.getlist('overlay_cycle_end')
+            reset_gain_rel = request.args.get('reset_gain_rel', '').strip()
+            selected_oc_exp = request.args.get('selected_oc_exp', '').strip()
+            selected_sc_exp = request.args.get('selected_sc_exp', '').strip()
+
+            for index, override_exp_path in enumerate(rel_values):
+                override_exp_path = str(override_exp_path or '').strip()
+                if not override_exp_path:
+                    continue
+                rload_id = str(rload_values[index]).strip() if index < len(rload_values) else ''
+                gain = str(gain_values[index]).strip() if index < len(gain_values) else ''
+                req = str(req_values[index]).strip() if index < len(req_values) else ''
+                auto_gain = auto_gain_values[index] == '1' if index < len(auto_gain_values) else False
+                overlay_cycle_start = str(overlay_start_values[index]).strip() if index < len(overlay_start_values) else ''
+                overlay_cycle_end = str(overlay_end_values[index]).strip() if index < len(overlay_end_values) else ''
+                if reset_gain_rel and override_exp_path == reset_gain_rel:
+                    gain = ''
+                    req = ''
+                    auto_gain = True
+                save_experiment_override(override_exp_path, {
+                    'rload_id': rload_id,
+                    'gain': gain,
+                    'req': req,
+                    'auto_gain': auto_gain,
+                    'overlay_cycle_start': overlay_cycle_start,
+                    'overlay_cycle_end': overlay_cycle_end,
+                })
+            return redirect(url_for(
+                'list_files',
+                downsample=downsample_percent,
+                selected_oc_exp=selected_oc_exp,
+                selected_sc_exp=selected_sc_exp
+            ))
+
         cached = LIST_FILES_CACHE.get(cache_key)
         if cached is not None:
             return render_template(
                 'view_files.html',
                 files=cached['files'],
-                has_tdms=has_tdms_support(),
                 selected_tribuid=selected_tribuid,
                 file_count=cached['file_count'],
                 downsample_percent=downsample_percent,
                 mean_power_plots=cached['mean_power_plots'],
                 optimal_power_plot=cached['optimal_power_plot'],
                 mean_vpp_plot=cached['mean_vpp_plot'],
+                oc_sc_comparison_plot=cached.get('oc_sc_comparison_plot'),
+                oc_candidates=cached.get('oc_candidates', []),
+                sc_candidates=cached.get('sc_candidates', []),
+                selected_oc_exp=cached.get('selected_oc_exp', ''),
+                selected_sc_exp=cached.get('selected_sc_exp', ''),
                 available_rload_ids=cached['available_rload_ids'],
             )
 
@@ -192,24 +347,44 @@ def register_routes(app):
             flash(f'Unable to read selected TribuId rows: {error}')
             return redirect(url_for('metadata_preview'))
 
-        file_entries = []
+        experiment_list = []
         param_store = session.get('peak_params_store', {})
+        experiment_overrides = get_experiment_overrides()
+        oc_candidates = []
+        sc_candidates = []
+
+        def find_metric_column(df: pd.DataFrame, keywords):
+            for col_name in df.columns:
+                if any(keyword in str(col_name).lower() for keyword in keywords):
+                    return col_name
+            return None
 
         for experiment in experiment_folders:
 
-            rload_id = experiment.get('RloadId', '')
-            load_info = lookup_load_info(loads_info_df, rload_id)
-            is_oc_sc = is_open_short_rload(rload_id)
-
+            # 1. Extract RloadId and check if it's open/short circuit
             exp_path = experiment.get('exp_path', '')
-            dfData_all, _ = get_cached_experiment_data(exp_path)
+            saved_override = experiment_overrides.get(exp_path, {})
+            rload_id = str(saved_override.get('rload_id') or experiment.get('RloadId', '')).strip()
+            load_info = lookup_load_info(loads_info_df, rload_id)  # Extract Req and Gain from LoadsDescription
+            is_oc_sc = is_open_short_rload(rload_id)
+            auto_gain = bool(saved_override.get('auto_gain', True))
+
+            # 2. Load the selected cycle range from experiment data
+            cycles_list = load_experiment_cycles(exp_path)
+            overlay_cycles_max = len(cycles_list) if cycles_list else 0
+            overlay_cycle_start, overlay_cycle_end = normalize_cycle_range(
+                overlay_cycles_max,
+                saved_override.get('overlay_cycle_start', ''),
+                saved_override.get('overlay_cycle_end', '')
+            )
+            dfData_all, _ = build_cycle_window_dataframe(cycles_list, overlay_cycle_start, overlay_cycle_end)
             if dfData_all is None:
                 raise Exception("Cycles list is empty")
 
-            # Create the base entry first
-            entry = {
+            # 3. Create the experiment structure with all necessary information
+            experiment_data = {
                 'experiment_rel': exp_path,
-                'RloadId': experiment.get('RloadId', ''),
+                'RloadId': rload_id,
                 'TribuId': experiment.get('TribuId', ''),
                 'SampleIdTriboNeg': experiment.get('SampleIdTriboNeg', ''),
                 'SampleIdTriboPos': experiment.get('SampleIdTriboPos', ''),
@@ -220,63 +395,112 @@ def register_routes(app):
                 'rload_missing': load_info['missing'],
                 'rload_options': available_rload_ids,
                 'is_oc_sc': is_oc_sc,
+                'auto_gain': auto_gain,
+                'overlay_cycle_start': overlay_cycle_start,
+                'overlay_cycle_end': overlay_cycle_end,
+                'overlay_cycles_max': overlay_cycles_max,
             }
 
-            # 2. Get Req and Gain (needed for the key)
+            # 4. Add Req and Gain values in the experiment_data, considering the RloadId and whether it's open/short circuit
             if not load_info['missing'] and not is_oc_sc:
-                entry['req'] = load_info['Req']
-                entry['gain'] = load_info['Gain']
+                experiment_data['req'] = float(load_info['Req'])
+                experiment_data['gain'] = float(load_info['Gain']) if auto_gain else ''
             else:
-                entry['req'] = ''
-                entry['gain'] = load_info['Gain'] if not load_info['missing'] else ''
+                experiment_data['req'] = ''
+                experiment_data['gain'] = ''
 
-            # 3. NOW create the graph_key and get saved params
-            TribuId = entry['TribuId']
-            req_val = entry['req']
+            override_req = str(saved_override.get('req', '')).strip()
+            if override_req:
+                try:
+                    experiment_data['req'] = float(override_req)
+                except ValueError:
+                    pass
+            override_gain = str(saved_override.get('gain', '')).strip()
+            if override_gain:
+                try:
+                    experiment_data['gain'] = float(override_gain)
+                except ValueError:
+                    pass
+
+            # 5. Create the graph_key
+            TribuId = experiment_data['TribuId']
+            req_val = experiment_data['req']
             graph_key = f"{TribuId}_R{req_val}"
-            saved_params = param_store.get(graph_key, {})
 
-            # 4. Use saved_params in calculations
+            # 6. Calculate mean power, peak power, and mean Vpp only if the RloadId is valid and not open/short circuit
+            saved_params = param_store.get(graph_key, {})
             if not load_info['missing'] and not is_oc_sc:
                 try:
+                    calc_gain = float(experiment_data['gain'])
+                    calc_req = float(experiment_data['req'])
                     # IMPORTANT: Pass saved_params to all calculation functions
-                    entry['mean_power'] = calculate_mean_power(
-                        dfData_all, exp_path, float(entry['gain']), float(entry['req']),
-                        peak_params=saved_params  # <--- Pass here
+                    experiment_data['mean_power'] = calculate_mean_power(
+                        dfData_all, exp_path, calc_gain, calc_req,
+                        peak_params=saved_params
                     )
-                    entry['peak_power'] = calculate_peak_power(
-                        dfData_all, exp_path, float(entry['gain']), float(entry['req']),
-                        peak_params=saved_params  # <--- Pass here
+                    experiment_data['peak_power'] = calculate_peak_power(
+                        dfData_all, exp_path, calc_gain, calc_req,
+                        peak_params=saved_params
                     )
-                    entry['mean_vpp'] = calculate_mean_vpp(
-                        dfData_all, exp_path, float(entry['gain']),
-                        peak_params=saved_params  # <--- Pass here
+                    experiment_data['mean_vpp'] = calculate_mean_vpp(
+                        dfData_all, exp_path, calc_gain,
+                        peak_params=saved_params
                     )
                 except Exception as error:
-                    entry['read_error'] = str(error)
+                    experiment_data['read_error'] = str(error)
+            elif is_oc_sc:
+                try:
+                    calc_gain = float(experiment_data['gain']) if str(experiment_data.get('gain', '')).strip() else None
+                except (TypeError, ValueError):
+                    calc_gain = None
+                try:
+                    analysis_df = apply_gain_to_dataframe(dfData_all, exp_path, calc_gain)
+                    exp_name = os.path.basename(str(exp_path).rstrip('\\/'))
+                    rload_upper = str(rload_id).strip().upper()
+                    if rload_upper == 'SC':
+                        current_col = find_metric_column(analysis_df, ['current', 'isc', 'ampere', 'input 1'])
+                        if current_col:
+                            y_vals = analysis_df[current_col].astype(float).values
+                            isc_params = {'distance': 20, 'prominence': np.std(y_vals) * 3}
+                            _, _, _, _, vpp_i = get_signal_peaks(y_vals, custom_params=isc_params, cutoff=0.3)
+                            sc_candidates.append({
+                                'exp_path': exp_path,
+                                'name': exp_name,
+                                'vpp_i': float(vpp_i),
+                            })
+                    elif rload_upper == 'OC':
+                        voltage_col = find_metric_column(analysis_df, ['voltage', 'input 0', 'voc'])
+                        if voltage_col:
+                            y_vals = analysis_df[voltage_col].astype(float).values
+                            _, _, mean_voc, _, _ = get_plateau_peaks(y_vals, threshold_percentile=80, cutoff=0.05)
+                            oc_candidates.append({
+                                'exp_path': exp_path,
+                                'name': exp_name,
+                                'max_v': abs(float(mean_voc)),
+                            })
+                except Exception:
+                    pass
 
-            file_entries.append(entry)
-
-        from collections import defaultdict
+            experiment_list.append(experiment_data)
 
         grouped_power_data = defaultdict(list)
         grouped_peak_power_data = defaultdict(list)
         grouped_vpp_data = defaultdict(list)
 
-        for entry in file_entries:
-            req = entry.get('req')
-            t_id = entry.get('TribuId', 'Unknown')
-            if req and not entry.get('is_oc_sc'):
+        for experiment_data in experiment_list:
+            req = experiment_data.get('req')
+            t_id = experiment_data.get('TribuId', 'Unknown')
+            if req and not experiment_data.get('is_oc_sc'):
                 try:
                     req_val = float(req)
                 except ValueError:
                     continue
-                if entry.get('mean_power') is not None:
-                    grouped_power_data[t_id].append((req_val, entry['mean_power']))
-                if entry.get('peak_power') is not None:
-                    grouped_peak_power_data[t_id].append((req_val, entry['peak_power']))
-                if entry.get('mean_vpp') is not None:
-                    grouped_vpp_data[t_id].append((req_val, entry['mean_vpp']))
+                if experiment_data.get('mean_power') is not None:
+                    grouped_power_data[t_id].append((req_val, experiment_data['mean_power']))
+                if experiment_data.get('peak_power') is not None:
+                    grouped_peak_power_data[t_id].append((req_val, experiment_data['peak_power']))
+                if experiment_data.get('mean_vpp') is not None:
+                    grouped_vpp_data[t_id].append((req_val, experiment_data['mean_vpp']))
 
         # --- REPLACING THE OPTIMAL POINTS CALCULATION IN routes.py ---
         # Calculate Optimal Points
@@ -313,6 +537,9 @@ def register_routes(app):
         mean_power_plots = []
         optimal_power_plot = None
         mean_vpp_plot = None
+        oc_sc_comparison_plot = None
+        selected_oc_candidate = None
+        selected_sc_candidate = None
 
         try:
             if grouped_power_data:
@@ -343,30 +570,55 @@ def register_routes(app):
                     grouped_vpp_data,
                     f'Mean Vpp vs Resistance ({selected_tribuid})'
                 )
+            if oc_candidates and sc_candidates:
+                oc_by_path = {item['exp_path']: item for item in oc_candidates}
+                sc_by_path = {item['exp_path']: item for item in sc_candidates}
+                selected_oc_candidate = oc_by_path.get(selected_oc_exp) if selected_oc_exp else None
+                selected_sc_candidate = sc_by_path.get(selected_sc_exp) if selected_sc_exp else None
+                if selected_oc_candidate is None:
+                    selected_oc_candidate = oc_candidates[0]
+                    selected_oc_exp = selected_oc_candidate['exp_path']
+                if selected_sc_candidate is None:
+                    selected_sc_candidate = sc_candidates[0]
+                    selected_sc_exp = selected_sc_candidate['exp_path']
+
+                oc_sc_comparison_plot = create_comparison_summary_plot(
+                    [{'name': selected_oc_candidate['name'], 'max_v': selected_oc_candidate['max_v']}],
+                    [{'name': selected_sc_candidate['name'], 'vpp_i': selected_sc_candidate['vpp_i']}]
+                )
 
 
         except Exception as e:
-            print(f"Error generando gráficas: {e}")
+            print(f"Error generating plots: {e}")
 
         LIST_FILES_CACHE[cache_key] = {
-            'files': file_entries,
+            'files': experiment_list,
             'file_count': len(sample),
             'mean_power_plots': mean_power_plots,
             'optimal_power_plot': optimal_power_plot,
             'mean_vpp_plot': mean_vpp_plot,
+            'oc_sc_comparison_plot': oc_sc_comparison_plot,
+            'oc_candidates': [{'exp_path': item['exp_path'], 'name': item['name']} for item in oc_candidates],
+            'sc_candidates': [{'exp_path': item['exp_path'], 'name': item['name']} for item in sc_candidates],
+            'selected_oc_exp': selected_oc_exp,
+            'selected_sc_exp': selected_sc_exp,
             'available_rload_ids': available_rload_ids,
         }
 
         return render_template(
             'view_files.html',
-            files=file_entries,
-            has_tdms=has_tdms_support(),
+            files=experiment_list,
             selected_tribuid=selected_tribuid,
             file_count=len(sample),
             downsample_percent=downsample_percent,
             mean_power_plots=mean_power_plots,
             optimal_power_plot=optimal_power_plot,
             mean_vpp_plot=mean_vpp_plot,
+            oc_sc_comparison_plot=oc_sc_comparison_plot,
+            oc_candidates=[{'exp_path': item['exp_path'], 'name': item['name']} for item in oc_candidates],
+            sc_candidates=[{'exp_path': item['exp_path'], 'name': item['name']} for item in sc_candidates],
+            selected_oc_exp=selected_oc_exp,
+            selected_sc_exp=selected_sc_exp,
             available_rload_ids=available_rload_ids,
         )
 
@@ -382,20 +634,41 @@ def register_routes(app):
             flash('Missing parameters')
             return redirect(url_for('index'))
 
+        experiment_overrides = get_experiment_overrides()
+        saved_override = experiment_overrides.get(exp_path, {}) if exp_path else {}
+
         # 1. Get the identifiers from the URL
         TribuId = request.args.get('TribuId', 'Unknown')
-        req_val = request.args.get('req', '0')
+        req_val = request.args.get('req', str(saved_override.get('req', '0')))
         graph_key = f"{TribuId}_R{req_val}"  # Example: "Tribu123_R1000"
-        default_graphs = ['voltage', 'power', 'position', 'force', 'is_moving', 'up_down']
+        default_graphs = ['voltage', 'power', 'fft', 'position', 'force', 'is_moving', 'up_down']
         requested_graphs = request.args.getlist('graphs')
         selected_graphs = [g for g in requested_graphs if g in default_graphs] if requested_graphs else default_graphs
         if not selected_graphs:
             selected_graphs = default_graphs
         auto_gain_values = request.args.getlist('auto_gain')
-        auto_gain = auto_gain_values[-1] == '1' if auto_gain_values else True
+        auto_gain = auto_gain_values[-1] == '1' if auto_gain_values else bool(saved_override.get('auto_gain', True))
         notch_enable_values = request.args.getlist('notch_enable')
         notch_enabled = notch_enable_values[-1] == '1' if notch_enable_values else False
+        raw_signal_values = request.args.getlist('show_raw_signal')
+        show_raw_signal = raw_signal_values[-1] == '1' if raw_signal_values else True
+        filtered_signal_values = request.args.getlist('show_filtered_signal')
+        show_filtered_signal = filtered_signal_values[-1] == '1' if filtered_signal_values else True
+        overlay_raw_signal_values = request.args.getlist('overlay_show_raw_signal')
+        overlay_show_raw_signal = (
+            overlay_raw_signal_values[-1] == '1'
+            if overlay_raw_signal_values
+            else as_bool(saved_override.get('overlay_show_raw_signal', True), True)
+        )
+        overlay_filtered_signal_values = request.args.getlist('overlay_show_filtered_signal')
+        overlay_show_filtered_signal = (
+            overlay_filtered_signal_values[-1] == '1'
+            if overlay_filtered_signal_values
+            else as_bool(saved_override.get('overlay_show_filtered_signal', False), False)
+        )
         rload_id_value = request.args.get('rload_id', '').strip()
+        if not rload_id_value:
+            rload_id_value = str(saved_override.get('rload_id', '')).strip()
         rload_options = []
 
         loads_info_df = None
@@ -450,13 +723,24 @@ def register_routes(app):
         final_peak_params = {'cutoff': 0.1}  # Default fallback
         final_peak_params.update(session['peak_params_store'].get(graph_key, {}))
         try:
-            dfData_all, cycle_markers = get_cached_experiment_data(exp_path)
+            cycles_list = load_experiment_cycles(exp_path)
+            overlay_cycles_max = len(cycles_list) if cycles_list else 0
+            overlay_cycle_start, overlay_cycle_end = normalize_cycle_range(
+                overlay_cycles_max,
+                request.args.get('overlay_cycle_start', saved_override.get('overlay_cycle_start', '')),
+                request.args.get('overlay_cycle_end', saved_override.get('overlay_cycle_end', ''))
+            )
+            dfData_all, cycle_markers = build_cycle_window_dataframe(
+                cycles_list,
+                overlay_cycle_start,
+                overlay_cycle_end
+            )
             if dfData_all is None:
                 flash(f'Error Cycles list is empty')
                 return redirect(url_for('list_files'))
 
-            gain_value = request.args.get('gain', '').strip()
-            req_value = request.args.get('req', '').strip()
+            gain_value = request.args.get('gain', str(saved_override.get('gain', ''))).strip()
+            req_value = request.args.get('req', str(saved_override.get('req', ''))).strip()
             is_oc_sc = is_open_short_rload(rload_id_value)
             is_sc = is_short_circuit_rload(rload_id_value)
             signal_mode = 'current' if is_sc else 'voltage'
@@ -488,36 +772,49 @@ def register_routes(app):
             if is_oc_sc:
                 selected_graphs = [g for g in selected_graphs if g != 'power']
                 if not selected_graphs:
-                    selected_graphs = ['voltage', 'position', 'force', 'is_moving', 'up_down']
+                    selected_graphs = ['voltage', 'fft', 'position', 'force', 'is_moving', 'up_down']
                 req = None
                 req_value = ''
-            if is_sc:
-                notch_enabled = False
+
+            save_experiment_override(exp_path, {
+                'rload_id': rload_id_value,
+                'gain': gain_value,
+                'req': req_value,
+                'auto_gain': auto_gain,
+                'overlay_cycle_start': str(overlay_cycle_start),
+                'overlay_cycle_end': str(overlay_cycle_end),
+                'overlay_show_raw_signal': overlay_show_raw_signal,
+                'overlay_show_filtered_signal': overlay_show_filtered_signal,
+            })
 
             notch_freq_value = request.args.get('notch_freq', '').strip()
             notch_q_value = request.args.get('notch_q', '').strip()
             try:
-                notch_freq = float(notch_freq_value) if notch_freq_value else 50.0
-                if notch_freq <= 0:
-                    raise ValueError
-            except ValueError:
-                flash(f"Invalid notch frequency '{notch_freq_value}'. Using default 50 Hz.")
-                notch_freq = 50.0
+                notch_frequencies = parse_notch_csv_values(notch_freq_value, 'notch frequency')
+                if not notch_frequencies:
+                    notch_frequencies = [50.0]
+                    notch_freq_value = '50'
+                notch_q_values = parse_notch_csv_values(notch_q_value, 'notch Q factor')
+                if not notch_q_values:
+                    notch_q_values = [30.0]
+                    notch_q_value = '30'
+                if len(notch_q_values) == 1 and len(notch_frequencies) > 1:
+                    notch_q_values = notch_q_values * len(notch_frequencies)
+                elif len(notch_q_values) != len(notch_frequencies):
+                    raise ValueError('Notch Q factor count must be 1 or equal to notch frequency count')
+            except ValueError as error:
+                flash(f'{error}. Using default notch parameters (50 Hz, Q=30).')
+                notch_frequencies = [50.0]
+                notch_q_values = [30.0]
                 notch_freq_value = '50'
-
-            try:
-                notch_q = float(notch_q_value) if notch_q_value else 30.0
-                if notch_q <= 0:
-                    raise ValueError
-            except ValueError:
-                flash(f"Invalid notch Q factor '{notch_q_value}'. Using default 30.")
-                notch_q = 30.0
                 notch_q_value = '30'
 
             final_notch_params = {
                 'enabled': notch_enabled,
-                'frequency': notch_freq,
-                'q': notch_q,
+                'frequency': notch_frequencies,
+                'q': notch_q_values,
+                'show_raw_signal': show_raw_signal,
+                'show_filtered_signal': show_filtered_signal,
                 'frequency_display': notch_freq_value if notch_freq_value else '50',
                 'q_display': notch_q_value if notch_q_value else '30'
             }
@@ -553,6 +850,26 @@ def register_routes(app):
                     cycle_markers=cycle_markers
                 )
 
+            cycles_overlay_html = create_cycles_overlay_plot(
+                cycles_list,
+                exp_path=exp_path,
+                gain=gain,
+                signal_mode=signal_mode,
+                cycle_start=overlay_cycle_start,
+                cycle_end=overlay_cycle_end,
+                notch_params=final_notch_params,
+                show_raw_signal=overlay_show_raw_signal,
+                show_filtered_signal=overlay_show_filtered_signal
+            )
+            fft_plot_html = None
+            if 'fft' in set(selected_graphs):
+                fft_plot_html = create_signal_fft_plot(
+                    dfData_all,
+                    exp_path=exp_path,
+                    gain=gain,
+                    signal_mode=signal_mode,
+                    notch_params=final_notch_params
+                )
             mean_power = None
             if gain is not None and req is not None and not is_oc_sc:
                 mean_power = calculate_mean_power(dfData_all, exp_path, gain, req, peak_params=final_peak_params)
@@ -575,11 +892,18 @@ def register_routes(app):
                 auto_gain=auto_gain,
                 notch_params=final_notch_params,
                 is_oc_sc=is_oc_sc,
-                is_sc=is_sc
+                is_sc=is_sc,
+                fft_plot=fft_plot_html,
+                cycles_overlay=cycles_overlay_html,
+                overlay_cycle_start=overlay_cycle_start,
+                overlay_cycle_end=overlay_cycle_end,
+                overlay_cycles_max=overlay_cycles_max,
+                overlay_show_raw_signal=overlay_show_raw_signal,
+                overlay_show_filtered_signal=overlay_show_filtered_signal
             )
         except Exception as error:
             import traceback
-            print("ERROR DETECTADO EN VIEW_FILE:")
+            print("ERROR DETECTED IN VIEW_FILE:")
             print(traceback.format_exc())
             flash(f'Failed to process file: {error}')
             return redirect(url_for('list_files'))

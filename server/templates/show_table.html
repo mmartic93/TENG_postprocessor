@@ -3,12 +3,31 @@
   <head>
     <meta charset="utf-8">
     <title>CSV Preview - {{ filename }}</title>
+    <style>
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        margin: 20px;
+        color: #1f2937;
+        background: #f8fafc;
+      }
+      .card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 8px 20px rgba(17, 24, 39, 0.06);
+      }
+      h1 { color: #1d4ed8; }
+      a { color: #2563eb; font-weight: 600; text-decoration: none; }
+    </style>
   </head>
   <body>
+    <div class="card">
     <h1>CSV Preview: {{ filename }}</h1>
     <div>
       {{ table_html | safe }}
     </div>
     <p><a href="{{ url_for('list_files') }}">Back to list</a></p>
+    </div>
   </body>
 </html>

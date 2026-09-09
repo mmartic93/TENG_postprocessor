@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from typing import List, Dict
+from typing import List, Dict, Union
 from server.config import ALLOWED_META_EXT, REQUIRED_META_COLUMNS
 
 from datetime import datetime
@@ -114,7 +114,7 @@ def load_loads_description(path: str) -> pd.DataFrame:
     return df
 
 
-def lookup_load_info(loads_df: pd.DataFrame, RloadId: str) -> Dict[str, str]:
+def lookup_load_info(loads_df: pd.DataFrame, RloadId: str) -> Dict[str, Union[str, bool]]:
     if not RloadId or str(RloadId).strip() == '':
         return {'Req': '', 'Gain': '', 'missing': False}
     RloadId_norm = str(RloadId).strip()

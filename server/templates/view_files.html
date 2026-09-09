@@ -3,25 +3,131 @@
   <head>
     <meta charset="utf-8">
     <title>Files from metadata</title>
+    <style>
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        margin: 20px;
+        color: #1f2937;
+        background: #f8fafc;
+      }
+      h1, h2 { color: #1d4ed8; }
+      .card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 14px;
+        margin-bottom: 14px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #ffffff;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      th, td {
+        border: 1px solid #e5e7eb;
+        padding: 8px;
+        vertical-align: top;
+      }
+      th { background: #eff6ff; }
+      input, select, button {
+        padding: 6px 8px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+      }
+      button {
+        background: #2563eb;
+        color: #ffffff;
+        border: none;
+        cursor: pointer;
+      }
+      .flash-list {
+        border-radius: 10px;
+        padding: 10px 14px;
+        margin-bottom: 14px;
+      }
+      .flash-list.success {
+        background: #eff6ff;
+        border: 1px solid #93c5fd;
+        color: #1e3a8a;
+      }
+      .flash-list.error {
+        background: #fff1f2;
+        border: 1px solid #fecdd3;
+        color: #9f1239;
+      }
+      .plot-container {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 10px;
+      }
+      .footer-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 18px;
+        flex-wrap: wrap;
+      }
+      .action-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        background: linear-gradient(135deg, #2563eb, #1d4ed8);
+        color: #ffffff;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-weight: 600;
+        border: 1px solid #1d4ed8;
+        box-shadow: 0 8px 16px rgba(37, 99, 235, 0.2);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      .action-link:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 20px rgba(37, 99, 235, 0.28);
+      }
+      .action-link.secondary {
+        background: #ffffff;
+        color: #1d4ed8;
+        border-color: #93c5fd;
+        box-shadow: 0 6px 12px rgba(147, 197, 253, 0.35);
+      }
+      .top-actions {
+        margin: 10px 0 16px;
+      }
+      .btn-update-metrics {
+        background: linear-gradient(135deg, #1d4ed8, #1e40af);
+        color: #ffffff;
+        border: none;
+        border-radius: 12px;
+        padding: 12px 20px;
+        font-size: 1rem;
+        font-weight: 700;
+        min-width: 220px;
+        box-shadow: 0 10px 18px rgba(29, 78, 216, 0.25);
+      }
+      .btn-update-metrics:hover {
+        filter: brightness(1.03);
+      }
+    </style>
   </head>
   <body>
     <h1>Files referenced in metadata</h1>
-    {% with messages = get_flashed_messages() %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
-        <ul>
-        {% for msg in messages %}
-          <li>{{ msg }}</li>
+        {% for category, msg in messages %}
+          <div class="flash-list {{ 'success' if category == 'success' else 'error' }}">{{ msg }}</div>
         {% endfor %}
-        </ul>
       {% endif %}
     {% endwith %}
 
     {% if selected_tribuid %}
-      <p>Selected TribuId: <strong>{{ selected_tribuid }}</strong></p>
+      <p>Selected TribuId(s): <strong>{{ selected_tribuid }}</strong></p>
       <p>Experiments included: <strong>{{ file_count }}</strong></p>
     {% endif %}
 
-    <div style="margin: 20px 0; padding: 10px; border: 1px solid #ccc; background-color: #f9f9f9;">
+    <div class="card" style="margin: 20px 0;">
       <h3>Plotting Options</h3>
       <form method="get" action="{{ url_for('list_files') }}" style="display: inline;">
         <label for="downsample">Downsample data (%):</label>
@@ -31,9 +137,17 @@
       </form>
     </div>
 
+    <form method="get" action="{{ url_for('list_files') }}">
+      <input type="hidden" name="action" value="update_metrics">
+      <input type="hidden" name="downsample" value="{{ downsample_percent }}">
+      <input type="hidden" name="selected_oc_exp" value="{{ selected_oc_exp if selected_oc_exp is defined else '' }}">
+      <input type="hidden" name="selected_sc_exp" value="{{ selected_sc_exp if selected_sc_exp is defined else '' }}">
+      <div class="top-actions">
+        <button type="submit" class="btn-update-metrics">Update metrics</button>
+      </div>
     {% for TribuId, group in files | groupby('TribuId') %}
 
-    <div class="tribuid-section" style="margin-top: 30px; border-top: 2px solid #3498db; padding-top: 10px;">
+    <div class="tribuid-section card" style="margin-top: 30px; border-top: 2px solid #3498db; padding-top: 10px;">
       <h2 style="color: #2c3e50;">TribuId: {{ TribuId }}</h2>
 
       <table border="1" cellpadding="8" cellspacing="0" style="width: 100%;">
@@ -42,6 +156,7 @@
             <th>RloadId</th>
             <th>Req</th>
             <th>Gain</th>
+            <th>Cycle Range Used for Calculations</th>
             <th>Mean Power (W)</th>
             <th>Experiment</th>
           </tr>
@@ -50,32 +165,55 @@
           {% for f in group %}
             <tr>
               <td>
-                {{ f.RloadId or '—' }}
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <input type="hidden" name="rel" value="{{ f.experiment_rel }}">
+                  <input type="hidden" name="req" value="{{ f.req }}">
+                  <input type="hidden" name="auto_gain" value="0">
+                  <select name="rload_id" style="max-width: 140px;">
+                    {% if not f.RloadId %}
+                      <option value="" selected>—</option>
+                    {% endif %}
+                    {% for option in available_rload_ids %}
+                      <option value="{{ option }}" {% if option == f.RloadId %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
                 {% if f.rload_missing %}
-                  <br/><em style="color: red;">RloadId not found</em>
-                  <br/>
-                  <form method="get" action="{{ url_for('view_experiment') }}" style="margin-top: 6px;">
-                    <input type="hidden" name="TribuId" value="{{ f.TribuId }}">
-                    <input type="hidden" name="rel" value="{{ f.experiment_rel }}">
-                    <input type="hidden" name="downsample" value="{{ downsample_percent }}">
-                    <input type="hidden" name="gain" value="">
-                    <input type="hidden" name="req" value="">
-                    <input type="hidden" name="auto_gain" value="1">
-                    <select name="rload_id" required style="max-width: 140px;">
-                      <option value="" disabled selected>Select RloadId</option>
-                      {% for option in available_rload_ids %}
-                        <option value="{{ option }}">{{ option }}</option>
-                      {% endfor %}
-                    </select>
-                    <button type="submit" style="margin-left: 6px;">View</button>
-                  </form>
+                  <em style="color: red;">RloadId not found</em>
                 {% endif %}
                 {% if f.loads_description_error %}
                   <br/><em style="color: red;">{{ f.loads_description_error }}</em>
                 {% endif %}
               </td>
               <td>{{ f.req or '—' }}</td>
-              <td>{{ f.gain or '—' }}</td>
+              <td>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <input type="number" step="0.1" name="gain" value="{{ f.gain if f.gain is not none else '' }}" placeholder="Gain" style="max-width: 140px;">
+                  <button type="submit" name="reset_gain_rel" value="{{ f.experiment_rel }}" style="max-width: 140px;">Reset gain</button>
+                </div>
+              </td>
+              <td>
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                  <input
+                    type="number"
+                    name="overlay_cycle_start"
+                    min="1"
+                    max="{{ f.overlay_cycles_max if f.overlay_cycles_max else 1 }}"
+                    value="{{ f.overlay_cycle_start if f.overlay_cycle_start else 1 }}"
+                    placeholder="Start"
+                    style="max-width: 90px;"
+                  >
+                  <input
+                    type="number"
+                    name="overlay_cycle_end"
+                    min="1"
+                    max="{{ f.overlay_cycles_max if f.overlay_cycles_max else 1 }}"
+                    value="{{ f.overlay_cycle_end if f.overlay_cycle_end else 1 }}"
+                    placeholder="End"
+                    style="max-width: 90px;"
+                  >
+                </div>
+              </td>
               <td>
                   {% if f.is_oc_sc %}
                     — <em style="color: #666;">OC/SC</em>
@@ -92,11 +230,9 @@
                       <br/><em style="color: red;">{{ f.experiment_error }}</em>
                     {% else %}
                       <br/>
-                      {% if not f.rload_missing %}
-                        <a href="{{ url_for('view_experiment', TribuId=f.TribuId, rel=f.experiment_rel, downsample=downsample_percent, gain=f.gain, req=f.req, rload_id=f.RloadId) }}">
-                          <button type="button" style="background:#28a745; color:white; border:none; padding:2px 8px; cursor:pointer; border-radius:3px;">View</button>
-                        </a>
-                      {% endif %}
+                      <a href="{{ url_for('view_experiment', TribuId=f.TribuId, rel=f.experiment_rel, downsample=downsample_percent, gain=f.gain, req=f.req, rload_id=f.RloadId, auto_gain=0, overlay_cycle_start=f.overlay_cycle_start, overlay_cycle_end=f.overlay_cycle_end) }}">
+                        <button type="button" style="background:#28a745; color:white; border:none; padding:2px 8px; cursor:pointer; border-radius:3px;">Open</button>
+                      </a>
                     {% endif %}
                   {% else %}
                     <em>—</em>
@@ -110,6 +246,7 @@
     {% else %}
       <p>No files found for the selected TribuId(s).</p>
     {% endfor %}
+    </form>
 
     {% if mean_power_plots %}
       {% for plot in mean_power_plots %}
@@ -132,7 +269,37 @@
       </div>
     {% endif %}
 
-    <p><a href="{{ url_for('metadata_preview') }}">Change TribuId selection</a></p>
-    <p><a href="{{ url_for('index') }}">Upload another metadata file</a></p>
+    {% if oc_candidates and sc_candidates %}
+      <div class="card" style="margin-top: 20px;">
+        <h3>OC/SC Comparison Selection</h3>
+        <form method="get" action="{{ url_for('list_files') }}">
+          <input type="hidden" name="downsample" value="{{ downsample_percent }}">
+          <label for="selected_oc_exp">OC experiment:</label>
+          <select id="selected_oc_exp" name="selected_oc_exp" style="max-width: 420px;">
+            {% for option in oc_candidates %}
+              <option value="{{ option.exp_path }}" {% if option.exp_path == selected_oc_exp %}selected{% endif %}>{{ option.name }}</option>
+            {% endfor %}
+          </select>
+          <label for="selected_sc_exp" style="margin-left: 10px;">SC experiment:</label>
+          <select id="selected_sc_exp" name="selected_sc_exp" style="max-width: 420px;">
+            {% for option in sc_candidates %}
+              <option value="{{ option.exp_path }}" {% if option.exp_path == selected_sc_exp %}selected{% endif %}>{{ option.name }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" style="margin-left: 10px;">Update comparison</button>
+        </form>
+      </div>
+    {% endif %}
+
+    {% if oc_sc_comparison_plot %}
+      <div class="plot-container" style="margin-top: 20px;">
+        {{ oc_sc_comparison_plot | safe }}
+      </div>
+    {% endif %}
+
+    <div class="footer-actions">
+      <a class="action-link" href="{{ url_for('metadata_preview') }}">Change TribuId selection</a>
+      <a class="action-link secondary" href="{{ url_for('index') }}">Upload another metadata file</a>
+    </div>
   </body>
 </html>

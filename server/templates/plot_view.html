@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <title>Data Visualization - {{ filename }}</title>
     <style>
-      body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; color: #333; }
-      .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+      body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; color: #1f2937; background: #f8fafc; }
+      .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; }
       .header h1 { margin: 0; font-size: 1.5rem; color: #0056b3; }
       
-      .info { background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #dee2e6; margin-bottom: 20px; }
+      .info { background-color: #ffffff; padding: 15px; border-radius: 12px; border: 1px solid #dee2e6; margin-bottom: 20px; box-shadow: 0 8px 20px rgba(17, 24, 39, 0.06); }
       .info p { margin: 5px 0; font-size: 0.9rem; }
       
       .filter-grid { 
@@ -48,17 +48,33 @@
       }
       .btn-update:hover { background-color: #0056b3; }
       
-      .plot-container { border: 1px solid #eee; border-radius: 8px; overflow: hidden; }
-      .navigation { margin-top: 20px; padding-top: 10px; }
-      .navigation a { text-decoration: none; color: #007bff; font-weight: bold; }
+      .plot-container { background: #ffffff; border: 1px solid #eee; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 20px rgba(17, 24, 39, 0.06); }
+      .navigation { margin-top: 20px; padding-top: 10px; display: flex; gap: 10px; }
+      .action-btn {
+        display: inline-flex;
+        align-items: center;
+        text-decoration: none;
+        background: linear-gradient(135deg, #2563eb, #1d4ed8);
+        color: #ffffff;
+        border: 1px solid #1d4ed8;
+        border-radius: 10px;
+        padding: 8px 14px;
+        font-weight: 600;
+        box-shadow: 0 8px 16px rgba(37, 99, 235, 0.2);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      .action-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 20px rgba(37, 99, 235, 0.28);
+      }
     </style>
   </head>
   <body>
-    {% set selected = selected_graphs if selected_graphs is defined else ['voltage', 'power', 'position', 'force', 'is_moving', 'up_down'] %}
-    {% set notch = notch_params if notch_params is defined else {'enabled': False, 'frequency_display': '50', 'q_display': '30'} %}
+    {% set selected = selected_graphs if selected_graphs is defined else ['voltage', 'power', 'fft', 'position', 'force', 'is_moving', 'up_down'] %}
+    {% set notch = notch_params if notch_params is defined else {'enabled': False, 'show_raw_signal': True, 'show_filtered_signal': True, 'frequency_display': '50', 'q_display': '30'} %}
     <div class="header">
-      <h1>Visualización de Datos</h1>
-      <p>Archivo: <strong>{{ filename }}</strong></p>
+      <h1>Data Visualization</h1>
+      <p>File: <strong>{{ filename }}</strong></p>
     </div>
 
     {% with messages = get_flashed_messages() %}
@@ -83,7 +99,7 @@
           {% if mean_power is not none %}
             <p><strong>Mean Peak Power:</strong> <span style="color: #d9534f; font-size: 1.1rem;">{{ '%.4g' | format(mean_power) }} W</span></p>
           {% endif %}
-          <p><strong>Curvas:</strong> Seleccionables ({{ 'Corriente' if is_sc else 'Voltaje' }}, Potencia, Posición, Fuerza, IsMoving, Up/Down)</p>
+          <p><strong>Curves:</strong> Selectable ({{ 'Current' if is_sc else 'Voltage' }}, Power, FFT, Position, Force, IsMoving, Up/Down)</p>
         </div>
       </div>
 
@@ -107,7 +123,7 @@
 
           <div class="filter-group">
             <label for="gain">Gain</label>
-            <input type="number" step="any" id="gain" name="gain" value="{{ gain_display if gain_display is not none else '' }}" placeholder="e.g. 1000">
+            <input type="number" step="0.1" id="gain" name="gain" value="{{ gain_display if gain_display is not none else '' }}" placeholder="e.g. 1000">
             <label>
               <input type="hidden" name="auto_gain" value="0">
               <input type="checkbox" name="auto_gain" value="1" {% if auto_gain is not defined or auto_gain %}checked{% endif %}>
@@ -116,24 +132,35 @@
           </div>
 
           <div class="filter-group">
-            <label>Notch Filter (Voltage)</label>
+            <label>Notch Filter</label>
             <label>
               <input type="hidden" name="notch_enable" value="0">
-              <input type="checkbox" name="notch_enable" value="1" {% if notch.enabled %}checked{% endif %} {% if is_sc %}disabled{% endif %}>
-              Apply notch filter{% if is_sc %} (disabled in SC mode){% endif %}
+              <input type="checkbox" name="notch_enable" value="1" {% if notch.enabled %}checked{% endif %}>
+              Apply notch filter
             </label>
-            <label for="notch_freq">Frequency (Hz)</label>
-            <input type="number" step="any" min="0.0001" id="notch_freq" name="notch_freq" value="{{ notch.frequency_display }}">
-            <label for="notch_q">Q factor</label>
-            <input type="number" step="any" min="0.0001" id="notch_q" name="notch_q" value="{{ notch.q_display }}">
+            <label>
+              <input type="hidden" name="show_raw_signal" value="0">
+              <input type="checkbox" name="show_raw_signal" value="1" {% if notch.show_raw_signal %}checked{% endif %}>
+              Show non-filtered signal
+            </label>
+            <label>
+              <input type="hidden" name="show_filtered_signal" value="0">
+              <input type="checkbox" name="show_filtered_signal" value="1" {% if notch.show_filtered_signal %}checked{% endif %}>
+              Show filtered signal
+            </label>
+            <label for="notch_freq">Frequency/Frequencies (Hz)</label>
+            <input type="text" id="notch_freq" name="notch_freq" value="{{ notch.frequency_display }}" placeholder="e.g. 50 or 50, 100, 150">
+            <label for="notch_q">Q factor(s)</label>
+            <input type="text" id="notch_q" name="notch_q" value="{{ notch.q_display }}" placeholder="e.g. 30 or 30, 30, 30">
           </div>
 
           <div class="filter-group">
-            <label>Gráficas incluidas</label>
-            <label><input type="checkbox" name="graphs" value="voltage" {% if 'voltage' in selected %}checked{% endif %}>{{ 'Corriente' if is_sc else 'Voltaje' }}</label>
-            <label><input type="checkbox" name="graphs" value="power" {% if 'power' in selected %}checked{% endif %} {% if is_oc_sc %}disabled{% endif %}>Potencia{% if is_oc_sc %} (disabled for OC/SC){% endif %}</label>
-            <label><input type="checkbox" name="graphs" value="position" {% if 'position' in selected %}checked{% endif %}>Posición</label>
-            <label><input type="checkbox" name="graphs" value="force" {% if 'force' in selected %}checked{% endif %}>Fuerza</label>
+            <label>Included graphs</label>
+            <label><input type="checkbox" name="graphs" value="voltage" {% if 'voltage' in selected %}checked{% endif %}>{{ 'Current' if is_sc else 'Voltage' }}</label>
+            <label><input type="checkbox" name="graphs" value="power" {% if 'power' in selected %}checked{% endif %} {% if is_oc_sc %}disabled{% endif %}>Power{% if is_oc_sc %} (disabled for OC/SC){% endif %}</label>
+            <label><input type="checkbox" name="graphs" value="fft" {% if 'fft' in selected %}checked{% endif %}>FFT</label>
+            <label><input type="checkbox" name="graphs" value="position" {% if 'position' in selected %}checked{% endif %}>Position</label>
+            <label><input type="checkbox" name="graphs" value="force" {% if 'force' in selected %}checked{% endif %}>Force</label>
             <label><input type="checkbox" name="graphs" value="is_moving" {% if 'is_moving' in selected %}checked{% endif %}>IsMoving_Bool</label>
             <label><input type="checkbox" name="graphs" value="up_down" {% if 'up_down' in selected %}checked{% endif %}>Motor_Up_Down_Bool</label>
           </div>
@@ -144,28 +171,68 @@
           </div>
 
           <div class="filter-group">
-            <label title="Altura mínima del pico">Pk Height</label>
+            <label for="overlay_cycle_start">Cycle Range Used for Calculations</label>
+            <input
+              type="range"
+              id="overlay_cycle_start"
+              name="overlay_cycle_start"
+              min="1"
+              max="{{ overlay_cycles_max if overlay_cycles_max and overlay_cycles_max > 0 else 1 }}"
+              value="{{ overlay_cycle_start if overlay_cycle_start and overlay_cycle_start > 0 else 1 }}"
+              oninput="(function(){var s=document.getElementById('overlay_cycle_start');var e=document.getElementById('overlay_cycle_end');if(parseInt(s.value)>parseInt(e.value)){e.value=s.value;}document.getElementById('overlay_cycle_start_value').textContent=s.value;document.getElementById('overlay_cycle_end_value').textContent=e.value;})()"
+              {% if not overlay_cycles_max or overlay_cycles_max <= 1 %}disabled{% endif %}
+            >
+            <input
+              type="range"
+              id="overlay_cycle_end"
+              name="overlay_cycle_end"
+              min="1"
+              max="{{ overlay_cycles_max if overlay_cycles_max and overlay_cycles_max > 0 else 1 }}"
+              value="{{ overlay_cycle_end if overlay_cycle_end and overlay_cycle_end > 0 else 1 }}"
+              oninput="(function(){var s=document.getElementById('overlay_cycle_start');var e=document.getElementById('overlay_cycle_end');if(parseInt(e.value)<parseInt(s.value)){s.value=e.value;}document.getElementById('overlay_cycle_start_value').textContent=s.value;document.getElementById('overlay_cycle_end_value').textContent=e.value;})()"
+              {% if not overlay_cycles_max or overlay_cycles_max <= 1 %}disabled{% endif %}
+            >
+            <small>
+              <span id="overlay_cycle_start_value">{{ overlay_cycle_start if overlay_cycle_start and overlay_cycle_start > 0 else 1 }}</span>
+              to
+              <span id="overlay_cycle_end_value">{{ overlay_cycle_end if overlay_cycle_end and overlay_cycle_end > 0 else 1 }}</span>
+              / {{ overlay_cycles_max if overlay_cycles_max else 0 }}
+            </small>
+            <label style="margin-top: 8px;">
+              <input type="hidden" name="overlay_show_raw_signal" value="0">
+              <input type="checkbox" name="overlay_show_raw_signal" value="1" {% if overlay_show_raw_signal is not defined or overlay_show_raw_signal %}checked{% endif %}>
+              Show Overlay raw signal
+            </label>
+            <label>
+              <input type="hidden" name="overlay_show_filtered_signal" value="0">
+              <input type="checkbox" name="overlay_show_filtered_signal" value="1" {% if overlay_show_filtered_signal %}checked{% endif %}>
+              Show Overlay filtered signal
+            </label>
+          </div>
+
+          <div class="filter-group">
+            <label title="Minimum peak height">Pk Height</label>
             <input type="number" step="any" name="pk_height" placeholder="Auto" value="{{ peak_params.height if peak_params.height is not none else '' }}">
           </div>
 
           <div class="filter-group">
-            <label title="Prominencia mínima">Pk Prominence</label>
+            <label title="Minimum prominence">Pk Prominence</label>
             <input type="number" step="any" name="pk_prom" placeholder="Auto" value="{{ peak_params.prominence if peak_params.prominence is not none else '' }}">
           </div>
 
           <div class="filter-group">
-            <label title="Distancia mínima entre picos (muestras)">Pk Distance</label>
+            <label title="Minimum distance between peaks (samples)">Pk Distance</label>
             <input type="number" name="pk_dist" placeholder="Auto" value="{{ peak_params.distance if peak_params.distance is not none else '' }}">
           </div>
 
           <div class="filter-group">
-            <label title="Filtro pasa-bajas (0.01 a 0.99)">Cutoff Filter</label>
+            <label title="Low-pass filter (0.01 to 0.99)">Cutoff Filter</label>
             <input type="number" step="0.01" min="0.01" max="0.99" name="pk_cutoff" value="{{ peak_params.cutoff or 0.1 }}">
           </div>
 
           <div style="display: flex; flex-direction: column; gap: 5px;">
-            <button type="submit" class="btn-update">Actualizar Gráfica</button>
-            <button type="submit" name="reset_peaks" value="1" class="btn-update" style="background-color: #6c757d;">Reset a Auto</button>
+            <button type="submit" class="btn-update">Update Plot</button>
+            <button type="submit" name="reset_peaks" value="1" class="btn-update" style="background-color: #6c757d;">Reset to Auto</button>
           </div>
         </div>
       </form>
@@ -175,8 +242,18 @@
       {{ plot | safe }}
     </div>
 
+    {% if fft_plot %}
+      <div class="plot-container" style="margin-top: 20px;">
+        {{ fft_plot | safe }}
+      </div>
+    {% endif %}
+
+    <div class="plot-container" style="margin-top: 20px;">
+      {{ cycles_overlay | safe }}
+    </div>
+
     <div class="navigation">
-      <a href="{{ url_for('list_files', downsample=downsample_percent) }}">&larr; Volver a la lista</a>
+      <a class="action-btn" href="{{ url_for('list_files', downsample=downsample_percent) }}">&larr; Back to list</a>
     </div>
   </body>
 </html>

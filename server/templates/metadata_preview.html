@@ -3,6 +3,100 @@
   <head>
     <meta charset="utf-8">
     <title>Metadata Preview</title>
+    <style>
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        margin: 20px;
+        color: #1f2937;
+        background: #f8fafc;
+      }
+      .panel {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      .tribuid-card {
+        background: #ffffff;
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 8px 20px rgba(37, 99, 235, 0.08);
+        max-width: 460px;
+      }
+      .tribuid-card h2 {
+        margin: 0 0 8px 0;
+        color: #1d4ed8;
+        font-size: 1.1rem;
+      }
+      .tribuid-card label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+      .tribuid-card select {
+        width: 100%;
+        min-height: 260px;
+        border: 1px solid #93c5fd;
+        border-radius: 10px;
+        padding: 8px;
+        background: #f8fbff;
+      }
+      .tribuid-card small {
+        color: #6b7280;
+      }
+      .btn-primary {
+        margin-top: 12px;
+        background: #2563eb;
+        color: #ffffff;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 14px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      table {
+        background: #ffffff;
+        border-collapse: collapse;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      th, td {
+        border: 1px solid #e5e7eb;
+        padding: 8px;
+      }
+      th {
+        background: #eff6ff;
+      }
+      ul {
+        background: #fff1f2;
+        border: 1px solid #fecdd3;
+        border-radius: 10px;
+        padding: 10px 14px;
+      }
+      .footer-actions {
+        margin-top: 18px;
+      }
+      .action-link {
+        display: inline-flex;
+        align-items: center;
+        text-decoration: none;
+        background: linear-gradient(135deg, #2563eb, #1d4ed8);
+        color: #ffffff;
+        border: 1px solid #1d4ed8;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-weight: 600;
+        box-shadow: 0 8px 16px rgba(37, 99, 235, 0.2);
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      .action-link:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 20px rgba(37, 99, 235, 0.28);
+      }
+    </style>
   </head>
   <body>
     <h1>Metadata Preview</h1>
@@ -16,7 +110,9 @@
       {% endif %}
     {% endwith %}
 
-    <p>Columns shown from CSV metadata: <strong>{{ required_columns | join(', ') }}</strong></p>
+    <div class="panel">
+      <p>Columns shown from CSV metadata: <strong>{{ required_columns | join(', ') }}</strong></p>
+    </div>
 
     <table border="1" cellpadding="4" cellspacing="0">
       <thead>
@@ -41,13 +137,22 @@
       </tbody>
     </table>
 
-    <h2>Select sample by TribuId</h2>
-    <form method="post">
-      <label for="tribuid">TribuId:</label>
-      <input id="tribuid" name="tribuid" type="text" value="{{ selected_tribuid or '' }}" required />
-      <button type="submit">Select</button>
-    </form>
+    <div class="tribuid-card">
+      <h2>Select sample(s) by TribuId</h2>
+      <form method="post">
+        <label for="tribuid">TribuId list</label>
+        <select id="tribuid" name="tribuid" multiple size="12" required>
+          {% for option in tribuid_options %}
+            <option value="{{ option }}" {% if selected_tribuids is defined and option in selected_tribuids %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+        <p><small>Use Ctrl/Cmd or Shift to select multiple TribuIds.</small></p>
+        <button type="submit" class="btn-primary">Apply Selection</button>
+      </form>
+    </div>
 
-    <p><a href="{{ url_for('index') }}">Upload a different metadata CSV</a></p>
+    <div class="footer-actions">
+      <a class="action-link" href="{{ url_for('index') }}">Upload a different metadata CSV</a>
+    </div>
   </body>
 </html>
