@@ -367,6 +367,7 @@ def register_routes(app):
                 sc_candidates=cached.get('sc_candidates', []),
                 selected_oc_exp=cached.get('selected_oc_exp', ''),
                 selected_sc_exp=cached.get('selected_sc_exp', ''),
+                rload_default_gains=cached.get('rload_default_gains', {}),
                 available_rload_ids=cached['available_rload_ids'],
             )
 
@@ -378,6 +379,17 @@ def register_routes(app):
             available_rload_ids = sorted(
                 r_id for r_id in loads_info_df['RloadId'].astype(str).str.strip().tolist() if r_id
             )
+            rload_default_gains = {}
+            for _, load_row in loads_info_df.iterrows():
+                rload_key = str(load_row.get('RloadId', '') or '').strip()
+                if not rload_key:
+                    continue
+                gain_raw = load_row.get('Gain', None)
+                if pd.isna(gain_raw):
+                    continue
+                gain_text = str(gain_raw).strip().replace(',', '.')
+                if gain_text:
+                    rload_default_gains[rload_key] = gain_text
         except Exception as error:
             flash(f'Unable to read LoadsDescription file: {error}')
             return redirect(url_for('metadata_preview'))
@@ -645,6 +657,7 @@ def register_routes(app):
             'sc_candidates': [{'exp_path': item['exp_path'], 'name': item['name']} for item in sc_candidates],
             'selected_oc_exp': selected_oc_exp,
             'selected_sc_exp': selected_sc_exp,
+            'rload_default_gains': rload_default_gains,
             'available_rload_ids': available_rload_ids,
         }
 
@@ -662,6 +675,7 @@ def register_routes(app):
             sc_candidates=[{'exp_path': item['exp_path'], 'name': item['name']} for item in sc_candidates],
             selected_oc_exp=selected_oc_exp,
             selected_sc_exp=selected_sc_exp,
+            rload_default_gains=rload_default_gains,
             available_rload_ids=available_rload_ids,
         )
 
