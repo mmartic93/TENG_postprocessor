@@ -137,6 +137,12 @@ def register_routes(app):
             return False
         return default
 
+    def normalize_number_text(value) -> str:
+        text = str(value or '').strip()
+        if not text:
+            return ''
+        return text.replace(',', '.')
+
     def get_keithley_conversion_factors(exp_path: str):
         json_path = os.path.join(exp_path, 'experiment_metadata.json')
         if not os.path.exists(json_path):
@@ -160,6 +166,51 @@ def register_routes(app):
                     'conversion_factor': channel_config.get('conversion_factor'),
                 })
         return conversion_info, None
+
+    def get_primary_signal_multiplier_info(exp_path: str, signal_mode: str, gain):
+        factors, error = get_keithley_conversion_factors(exp_path)
+        if error:
+            return {
+                'channel': None,
+                'conversion_factor': None,
+                'gain_divisor': gain if signal_mode != 'current' else None,
+                'raw_multiplier': None,
+                'error': error,
+            }
+
+        aliases = ['current', 'isc', 'ampere', 'input1'] if signal_mode == 'current' else ['voltage', 'voc', 'input0']
+        selected = None
+        for item in factors:
+            token = ''.join(ch for ch in str(item.get('channel', '')).lower() if ch.isalnum())
+            if any(alias in token for alias in aliases):
+                selected = item
+                break
+        if selected is None and factors:
+            selected = factors[0]
+
+        conversion_factor = selected.get('conversion_factor') if selected else None
+        try:
+            conversion_multiplier = float(conversion_factor) if conversion_factor is not None else 1.0
+        except (TypeError, ValueError):
+            conversion_multiplier = 1.0
+
+        gain_divisor = None
+        gain_multiplier = 1.0
+        if signal_mode != 'current' and gain is not None:
+            try:
+                gain_divisor = float(gain)
+                if gain_divisor != 0:
+                    gain_multiplier = 1.0 / gain_divisor
+            except (TypeError, ValueError):
+                gain_divisor = None
+
+        return {
+            'channel': selected.get('channel') if selected else None,
+            'conversion_factor': conversion_factor,
+            'gain_divisor': gain_divisor,
+            'raw_multiplier': conversion_multiplier * gain_multiplier,
+            'error': None,
+        }
 
     @app.route('/', methods=['GET', 'POST'])
     def index():
@@ -638,8 +689,6 @@ def register_routes(app):
         selected_graphs = [g for g in requested_graphs if g in default_graphs] if requested_graphs else default_graphs
         if not selected_graphs:
             selected_graphs = default_graphs
-        auto_gain_values = request.args.getlist('auto_gain')
-        auto_gain = auto_gain_values[-1] == '1' if auto_gain_values else bool(saved_override.get('auto_gain', True))
         notch_enable_values = request.args.getlist('notch_enable')
         notch_enabled = notch_enable_values[-1] == '1' if notch_enable_values else False
         raw_signal_values = request.args.getlist('show_raw_signal')
@@ -658,12 +707,20 @@ def register_routes(app):
             if overlay_filtered_signal_values
             else as_bool(saved_override.get('overlay_show_filtered_signal', False), False)
         )
+        signal_source_value = request.args.get('signal_source', str(saved_override.get('signal_source', 'raw'))).strip().lower()
+        if signal_source_value not in {'raw', 'converted'}:
+            signal_source_value = 'raw'
+        use_converted_signal = signal_source_value == 'converted'
+        reset_gain_from_rload = request.args.get('reset_gain_from_rload') == '1'
         rload_id_value = request.args.get('rload_id', '').strip()
+        saved_rload_id = str(saved_override.get('rload_id', '')).strip()
         if not rload_id_value:
-            rload_id_value = str(saved_override.get('rload_id', '')).strip()
+            rload_id_value = saved_rload_id
+        rload_changed = ('rload_id' in request.args) and (rload_id_value != saved_rload_id)
         rload_options = []
 
         loads_info_df = None
+        rload_defaults = {}
         if metadata_path:
             try:
                 meta_dir = os.path.dirname(metadata_path)
@@ -672,6 +729,16 @@ def register_routes(app):
                 rload_options = sorted(
                     r_id for r_id in loads_info_df['RloadId'].astype(str).str.strip().tolist() if r_id
                 )
+                for _, row in loads_info_df.iterrows():
+                    r_id = str(row.get('RloadId', '') or '').strip()
+                    if not r_id:
+                        continue
+                    gain_val = row.get('Gain')
+                    if pd.isna(gain_val):
+                        continue
+                    gain_text = str(gain_val).strip()
+                    if gain_text:
+                        rload_defaults[r_id] = gain_text
             except Exception:
                 loads_info_df = None
 
@@ -731,8 +798,8 @@ def register_routes(app):
                 flash(f'Error Cycles list is empty')
                 return redirect(url_for('list_files'))
 
-            gain_value = request.args.get('gain', str(saved_override.get('gain', ''))).strip()
-            req_value = request.args.get('req', str(saved_override.get('req', ''))).strip()
+            gain_value = normalize_number_text(request.args.get('gain', str(saved_override.get('gain', ''))))
+            req_value = normalize_number_text(request.args.get('req', str(saved_override.get('req', ''))))
             is_oc_sc = is_open_short_rload(rload_id_value)
             is_sc = is_short_circuit_rload(rload_id_value)
             signal_mode = 'current' if is_sc else 'voltage'
@@ -745,9 +812,9 @@ def register_routes(app):
                     req_from_load = str(load_info.get('Req', '') or '').strip()
                     gain_from_load = str(load_info.get('Gain', '') or '').strip()
                     if req_from_load:
-                        req_value = req_from_load
-                    if auto_gain and gain_from_load:
-                        gain_value = gain_from_load
+                        req_value = normalize_number_text(req_from_load)
+                    if gain_from_load and (rload_changed or reset_gain_from_rload):
+                        gain_value = normalize_number_text(gain_from_load)
 
             try:
                 gain = float(gain_value) if gain_value else None
@@ -772,11 +839,11 @@ def register_routes(app):
                 'rload_id': rload_id_value,
                 'gain': gain_value,
                 'req': req_value,
-                'auto_gain': auto_gain,
                 'overlay_cycle_start': str(overlay_cycle_start),
                 'overlay_cycle_end': str(overlay_cycle_end),
                 'overlay_show_raw_signal': overlay_show_raw_signal,
                 'overlay_show_filtered_signal': overlay_show_filtered_signal,
+                'signal_source': signal_source_value,
             })
 
             notch_freq_value = request.args.get('notch_freq', '').strip()
@@ -823,7 +890,8 @@ def register_routes(app):
                     selected_graphs=selected_graphs,
                     notch_params=final_notch_params,
                     signal_mode=signal_mode,
-                    cycle_markers=cycle_markers
+                    cycle_markers=cycle_markers,
+                    use_converted_signal=use_converted_signal
                 )
             except Exception as e:
                 flash(f"Could not load associated voltage file: {e}")
@@ -839,7 +907,8 @@ def register_routes(app):
                     include_graphs=selected_graphs,
                     notch_params=final_notch_params,
                     signal_mode=signal_mode,
-                    cycle_markers=cycle_markers
+                    cycle_markers=cycle_markers,
+                    use_converted_signal=use_converted_signal
                 )
 
             cycles_overlay_html = create_cycles_overlay_plot(
@@ -851,7 +920,8 @@ def register_routes(app):
                 cycle_end=overlay_cycle_end,
                 notch_params=final_notch_params,
                 show_raw_signal=overlay_show_raw_signal,
-                show_filtered_signal=overlay_show_filtered_signal
+                show_filtered_signal=overlay_show_filtered_signal,
+                use_converted_signal=use_converted_signal
             )
             fft_plot_html = None
             if 'fft' in set(selected_graphs):
@@ -860,12 +930,14 @@ def register_routes(app):
                     exp_path=exp_path,
                     gain=gain,
                     signal_mode=signal_mode,
-                    notch_params=final_notch_params
+                    notch_params=final_notch_params,
+                    use_converted_signal=use_converted_signal
                 )
             mean_power = None
             if gain is not None and req is not None and not is_oc_sc:
                 mean_power = calculate_mean_power(dfData_all, exp_path, gain, req, peak_params=final_peak_params)
             conversion_factors, conversion_factors_error = get_keithley_conversion_factors(exp_path)
+            primary_multiplier_info = get_primary_signal_multiplier_info(exp_path, signal_mode, gain)
 
             df_info = f'{len(dfData_all)} rows × {len(dfData_all.columns)} columns'
             return render_template(
@@ -882,7 +954,7 @@ def register_routes(app):
                 tribu_id=TribuId,
                 rload_id_display=rload_id_value,
                 rload_options=rload_options,
-                auto_gain=auto_gain,
+                rload_defaults=rload_defaults,
                 notch_params=final_notch_params,
                 is_oc_sc=is_oc_sc,
                 is_sc=is_sc,
@@ -893,8 +965,11 @@ def register_routes(app):
                 overlay_cycles_max=overlay_cycles_max,
                 overlay_show_raw_signal=overlay_show_raw_signal,
                 overlay_show_filtered_signal=overlay_show_filtered_signal,
+                signal_source=signal_source_value,
+                use_converted_signal=use_converted_signal,
                 keithley_conversion_factors=conversion_factors,
-                keithley_conversion_factors_error=conversion_factors_error
+                keithley_conversion_factors_error=conversion_factors_error,
+                primary_multiplier_info=primary_multiplier_info
             )
         except Exception as error:
             import traceback

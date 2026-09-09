@@ -304,9 +304,10 @@ def calculate_peak_power(df: pd.DataFrame, exp_path: str, gain: float, req: floa
 def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', downsample_percent: int = 80,
                      gain: float = None, plot_mode: str = 'voltage', req: float = None,
                      peak_params: dict = None, include_graphs: list = None, notch_params: dict = None,
-                     signal_mode: str = 'voltage', cycle_markers: list = None) -> str:
+                     signal_mode: str = 'voltage', cycle_markers: list = None,
+                     use_converted_signal: bool = False) -> str:
 
-    if gain is not None:
+    if use_converted_signal:
         df = apply_gain_to_dataframe(df, exp_path, gain)
 
     if plot_mode == 'power':
@@ -567,9 +568,10 @@ def create_plot_html(df: pd.DataFrame, exp_path: str, title: str = 'Data Plot', 
 
 def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=100, gain=None, req=None, peak_params=None,
                                    selected_graphs=None, notch_params=None, signal_mode='voltage',
-                                   cycle_markers=None):
+                                   cycle_markers=None, use_converted_signal: bool = False):
 
-    exp_df = apply_gain_to_dataframe(exp_df, exp_path, gain)
+    if use_converted_signal:
+        exp_df = apply_gain_to_dataframe(exp_df, exp_path, gain)
 
     def find_col(df, keywords):
         for col in df.columns:
@@ -824,23 +826,24 @@ def create_combined_motor_daq_plot(exp_df, exp_path, title, downsample_percent=1
 
 
 def create_signal_fft_plot(exp_df: pd.DataFrame, exp_path: str, gain: float = None,
-                           signal_mode: str = 'voltage', notch_params: dict = None) -> str:
-    df_gain = apply_gain_to_dataframe(exp_df, exp_path, gain)
-    signal_col = find_primary_signal_column(df_gain, signal_mode)
+                           signal_mode: str = 'voltage', notch_params: dict = None,
+                           use_converted_signal: bool = False) -> str:
+    df_plot = apply_gain_to_dataframe(exp_df, exp_path, gain) if use_converted_signal else exp_df.copy()
+    signal_col = find_primary_signal_column(df_plot, signal_mode)
     signal_label = 'Current' if signal_mode == 'current' else 'Voltage'
     signal_unit = 'A' if signal_mode == 'current' else 'V'
 
     if not signal_col:
         return f'<p>{signal_label} FFT unavailable (signal column not found).</p>'
-    if 'Time' not in df_gain.columns:
+    if 'Time' not in df_plot.columns:
         return f'<p>{signal_label} FFT unavailable (missing time axis).</p>'
 
     try:
-        fs = infer_sampling_rate(df_gain['Time'].values)
+        fs = infer_sampling_rate(df_plot['Time'].values)
     except (ValueError, RuntimeError) as error:
         return f'<p>{signal_label} FFT unavailable ({error}).</p>'
 
-    signal = df_gain[signal_col].astype(float).values
+    signal = df_plot[signal_col].astype(float).values
     signal = signal - np.mean(signal)
     n = len(signal)
     if n < 2:
@@ -863,7 +866,7 @@ def create_signal_fft_plot(exp_df: pd.DataFrame, exp_path: str, gain: float = No
     if notch_enabled:
         try:
             filtered_signal, notch_freqs, notch_qs = apply_notch_filter_chain(
-                df_gain[signal_col].astype(float).values,
+                df_plot[signal_col].astype(float).values,
                 fs,
                 notch_params
             )
@@ -896,7 +899,8 @@ def create_signal_fft_plot(exp_df: pd.DataFrame, exp_path: str, gain: float = No
 def create_cycles_overlay_plot(cycles_list: List[pd.DataFrame], exp_path: str, gain: float = None,
                                signal_mode: str = 'voltage', cycle_start: int = 1,
                                cycle_end: int = None, notch_params: dict = None,
-                               show_raw_signal: bool = True, show_filtered_signal: bool = False) -> str:
+                               show_raw_signal: bool = True, show_filtered_signal: bool = False,
+                               use_converted_signal: bool = False) -> str:
     if not cycles_list:
         return '<p>No cycles available for overlay.</p>'
     notch_enabled = bool(notch_params and notch_params.get('enabled'))
@@ -924,18 +928,18 @@ def create_cycles_overlay_plot(cycles_list: List[pd.DataFrame], exp_path: str, g
     for index, cycle_df in enumerate(cycles_to_plot, start=start_cycle):
         if cycle_df is None or cycle_df.empty:
             continue
-        cycle_gain = apply_gain_to_dataframe(cycle_df, exp_path, gain)
-        signal_col = find_primary_signal_column(cycle_gain, signal_mode)
+        cycle_plot = apply_gain_to_dataframe(cycle_df, exp_path, gain) if use_converted_signal else cycle_df.copy()
+        signal_col = find_primary_signal_column(cycle_plot, signal_mode)
         if not signal_col:
             continue
 
-        y_values = cycle_gain[signal_col].astype(float).values
-        if 'Time' in cycle_gain.columns:
-            x_values = cycle_gain['Time'].astype(float).values
+        y_values = cycle_plot[signal_col].astype(float).values
+        if 'Time' in cycle_plot.columns:
+            x_values = cycle_plot['Time'].astype(float).values
             x_values = x_values - x_values[0] if len(x_values) else x_values
             x_title = 'Time relative to cycle start (s)'
         else:
-            x_values = np.arange(len(cycle_gain))
+            x_values = np.arange(len(cycle_plot))
             x_title = 'Sample index'
 
         cycle_has_trace = False
@@ -954,11 +958,11 @@ def create_cycles_overlay_plot(cycles_list: List[pd.DataFrame], exp_path: str, g
             cycle_has_trace = True
 
         if effective_show_filtered:
-            if 'Time' not in cycle_gain.columns:
+            if 'Time' not in cycle_plot.columns:
                 notch_unavailable_note = 'Filtered overlay unavailable (missing time axis)'
             else:
                 try:
-                    fs_notch = infer_sampling_rate(cycle_gain['Time'].astype(float).values)
+                    fs_notch = infer_sampling_rate(cycle_plot['Time'].astype(float).values)
                     filtered_signal, _, _ = apply_notch_filter_chain(y_values, fs_notch, notch_params)
                     filtered_line = dict(width=1.8, color='#6f42c1')
                     if show_raw_signal:

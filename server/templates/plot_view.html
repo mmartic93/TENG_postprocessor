@@ -105,7 +105,26 @@
           {% if gain_display %}<p><strong>Gain:</strong> {{ gain_display }}</p>{% endif %}
           {% if req_display %}<p><strong>Req:</strong> {{ req_display }} &Omega;</p>{% endif %}
           {% if is_oc_sc %}<p><strong>Mode:</strong> OC/SC raw-data only (power disabled)</p>{% endif %}
-          {% if is_sc %}<p><strong>Primary signal:</strong> Current (SC mode)</p>{% endif %}
+          <p><strong>Primary signal:</strong> {{ 'Current' if is_sc else 'Voltage' }}{% if is_sc %} (SC mode){% endif %}</p>
+          {% if primary_multiplier_info %}
+            {% if primary_multiplier_info.error %}
+              <p style="margin-top: 4px;"><strong>Raw data multiplier:</strong> unavailable ({{ primary_multiplier_info.error }})</p>
+            {% else %}
+              <p style="margin-top: 4px;">
+                <strong>Raw data multiplier{% if use_converted_signal %} (applied){% else %} (available){% endif %}:</strong>
+                {% if primary_multiplier_info.raw_multiplier is not none %}
+                  {{ '%.2f' | format(primary_multiplier_info.raw_multiplier) }}
+                {% else %}
+                  unavailable
+                {% endif %}
+              </p>
+              <p style="margin-top: 2px; font-size: 0.85rem; color: #4b5563;">
+                Channel: {{ primary_multiplier_info.channel if primary_multiplier_info.channel else 'N/A' }},
+                conversion factor: {{ primary_multiplier_info.conversion_factor if primary_multiplier_info.conversion_factor is not none else 'None' }},
+                gain divisor: {{ primary_multiplier_info.gain_divisor if primary_multiplier_info.gain_divisor is not none else 'None' }}
+              </p>
+            {% endif %}
+          {% endif %}
         </div>
         <div>
           {% if mean_power is not none %}
@@ -146,24 +165,33 @@
         <div class="filter-grid">
           <div class="filter-group">
             <label for="rload_id">RloadId</label>
-            <input type="text" id="rload_id" name="rload_id" list="rload-options" value="{{ rload_id_display if rload_id_display is defined else '' }}" placeholder="e.g. 100">
-            <datalist id="rload-options">
+            <select id="rload_id" name="rload_id">
+              {% if not rload_id_display %}
+                <option value="" selected>—</option>
+              {% endif %}
               {% if rload_options is defined %}
                 {% for option in rload_options %}
-                  <option value="{{ option }}"></option>
+                  {% set option_gain = rload_defaults.get(option, '') if rload_defaults is defined else '' %}
+                  <option value="{{ option }}" data-default-gain="{{ option_gain }}" {% if option == rload_id_display %}selected{% endif %}>{{ option }}</option>
                 {% endfor %}
               {% endif %}
-            </datalist>
+            </select>
           </div>
 
           <div class="filter-group">
             <label for="gain">Gain</label>
-            <input type="number" step="0.1" id="gain" name="gain" value="{{ gain_display if gain_display is not none else '' }}" placeholder="e.g. 1000">
-            <label>
-              <input type="hidden" name="auto_gain" value="0">
-              <input type="checkbox" name="auto_gain" value="1" {% if auto_gain is not defined or auto_gain %}checked{% endif %}>
-              Auto gain from RloadId
-            </label>
+            <input type="number" step="any" id="gain" name="gain" value="{{ gain_display if gain_display is not none else '' }}" placeholder="e.g. 1000">
+            <button type="button" id="reset_gain_from_rload_btn" class="btn-update" style="margin-top: 6px;">
+              Reset gain from RloadId
+            </button>
+          </div>
+
+          <div class="filter-group">
+            <label for="signal_source">Signal source</label>
+            <select id="signal_source" name="signal_source">
+              <option value="raw" {% if signal_source is not defined or signal_source == 'raw' %}selected{% endif %}>Original data (no gain / no conversion)</option>
+              <option value="converted" {% if signal_source == 'converted' %}selected{% endif %}>Use converted signal (gain + conversion)</option>
+            </select>
           </div>
 
           <div class="filter-group">
@@ -290,5 +318,39 @@
     <div class="navigation">
       <a class="action-btn" href="{{ url_for('list_files', downsample=downsample_percent) }}">&larr; Back to list</a>
     </div>
+    <script>
+      (function() {
+        var rloadSelect = document.getElementById('rload_id');
+        var gainInput = document.getElementById('gain');
+        var resetGainBtn = document.getElementById('reset_gain_from_rload_btn');
+        if (!rloadSelect || !gainInput) return;
+        function sanitizeGainValue(value) {
+          var text = String(value || '').trim().replace(',', '.');
+          if (!text) return '';
+          var parsed = Number(text);
+          if (!Number.isFinite(parsed)) return '';
+          return String(parsed);
+        }
+        function normalizeGainInput() {
+          gainInput.value = sanitizeGainValue(gainInput.value);
+        }
+        function applyDefaultGainFromSelectedRload() {
+          var selectedOption = rloadSelect.options[rloadSelect.selectedIndex];
+          if (!selectedOption) return;
+          var defaultGain = selectedOption.getAttribute('data-default-gain') || '';
+          gainInput.value = sanitizeGainValue(defaultGain);
+        }
+        rloadSelect.addEventListener('change', function() {
+          applyDefaultGainFromSelectedRload();
+        });
+        gainInput.addEventListener('change', normalizeGainInput);
+        gainInput.addEventListener('blur', normalizeGainInput);
+        if (resetGainBtn) {
+          resetGainBtn.addEventListener('click', function() {
+            applyDefaultGainFromSelectedRload();
+          });
+        }
+      })();
+    </script>
   </body>
 </html>
