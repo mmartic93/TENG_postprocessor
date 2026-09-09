@@ -190,7 +190,7 @@
               <td>
                 <div style="display: flex; flex-direction: column; gap: 6px;">
                   <input type="number" step="any" name="gain" class="gain-input" value="{{ f.gain if f.gain is not none else '' }}" placeholder="Gain" style="max-width: 140px;">
-                  <button type="submit" name="reset_gain_rel" value="{{ f.experiment_rel }}" style="max-width: 140px;">Reset gain</button>
+                  <button type="button" class="reset-gain-btn" style="max-width: 140px;">Reset gain</button>
                 </div>
               </td>
               <td>
@@ -312,18 +312,26 @@
           var parsed = Number(text);
           return Number.isFinite(parsed) ? String(parsed) : '';
         }
+        function applyDefaultGainForRow(row) {
+          if (!row) return;
+          var gainInput = row.querySelector('.gain-input');
+          var selectEl = row.querySelector('.rload-select');
+          if (!gainInput || !selectEl) return;
+          var selectedOption = selectEl.options[selectEl.selectedIndex];
+          if (!selectedOption) return;
+          var defaultGain = selectedOption.getAttribute('data-default-gain') || '';
+          gainInput.value = normalizeGain(defaultGain);
+        }
         rloadSelects.forEach(function(selectEl) {
           selectEl.addEventListener('change', function() {
             var row = selectEl.closest('tr');
-            if (!row) return;
-            var gainInput = row.querySelector('.gain-input');
-            if (!gainInput) return;
-            var selectedOption = selectEl.options[selectEl.selectedIndex];
-            if (!selectedOption) return;
-            var defaultGain = selectedOption.getAttribute('data-default-gain') || '';
-            if (defaultGain) {
-              gainInput.value = normalizeGain(defaultGain);
-            }
+            applyDefaultGainForRow(row);
+          });
+        });
+        var resetButtons = document.querySelectorAll('.reset-gain-btn');
+        resetButtons.forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            applyDefaultGainForRow(btn.closest('tr'));
           });
         });
       })();
