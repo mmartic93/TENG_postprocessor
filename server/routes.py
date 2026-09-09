@@ -1,4 +1,5 @@
 import os
+import json
 from flask import render_template, request, redirect, url_for, session, flash
 from data_processing.LoadData import ExtractCycles
 from data_processing.preview_service import create_combined_motor_daq_plot
@@ -135,6 +136,30 @@ def register_routes(app):
         if text in {'0', 'false', 'no', 'off'}:
             return False
         return default
+
+    def get_keithley_conversion_factors(exp_path: str):
+        json_path = os.path.join(exp_path, 'experiment_metadata.json')
+        if not os.path.exists(json_path):
+            return [], 'experiment_metadata.json not found'
+        try:
+            with open(json_path, 'r', encoding='utf-8') as file_handle:
+                metadata = json.load(file_handle)
+        except (OSError, json.JSONDecodeError):
+            return [], 'unable to read experiment_metadata.json'
+
+        conversion_info = []
+        for task in metadata.get('DAQTasks', []):
+            channels = task.get('DAQ_CHANNELS', {})
+            if not isinstance(channels, dict):
+                continue
+            for channel_name, channel_config in channels.items():
+                if not isinstance(channel_config, dict):
+                    continue
+                conversion_info.append({
+                    'channel': str(channel_name),
+                    'conversion_factor': channel_config.get('conversion_factor'),
+                })
+        return conversion_info, None
 
     @app.route('/', methods=['GET', 'POST'])
     def index():
@@ -840,6 +865,7 @@ def register_routes(app):
             mean_power = None
             if gain is not None and req is not None and not is_oc_sc:
                 mean_power = calculate_mean_power(dfData_all, exp_path, gain, req, peak_params=final_peak_params)
+            conversion_factors, conversion_factors_error = get_keithley_conversion_factors(exp_path)
 
             df_info = f'{len(dfData_all)} rows × {len(dfData_all.columns)} columns'
             return render_template(
@@ -866,7 +892,9 @@ def register_routes(app):
                 overlay_cycle_end=overlay_cycle_end,
                 overlay_cycles_max=overlay_cycles_max,
                 overlay_show_raw_signal=overlay_show_raw_signal,
-                overlay_show_filtered_signal=overlay_show_filtered_signal
+                overlay_show_filtered_signal=overlay_show_filtered_signal,
+                keithley_conversion_factors=conversion_factors,
+                keithley_conversion_factors_error=conversion_factors_error
             )
         except Exception as error:
             import traceback

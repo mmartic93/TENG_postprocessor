@@ -49,6 +49,18 @@
       .btn-update:hover { background-color: #0056b3; }
       
       .plot-container { background: #ffffff; border: 1px solid #eee; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 20px rgba(17, 24, 39, 0.06); }
+      .mini-table {
+        margin-top: 8px;
+        border-collapse: collapse;
+        font-size: 0.85rem;
+      }
+      .mini-table th, .mini-table td {
+        border: 1px solid #d1d5db;
+        padding: 4px 6px;
+      }
+      .mini-table th {
+        background: #eff6ff;
+      }
       .navigation { margin-top: 20px; padding-top: 10px; display: flex; gap: 10px; }
       .action-btn {
         display: inline-flex;
@@ -100,6 +112,29 @@
             <p><strong>Mean Peak Power:</strong> <span style="color: #d9534f; font-size: 1.1rem;">{{ '%.4g' | format(mean_power) }} W</span></p>
           {% endif %}
           <p><strong>Curves:</strong> Selectable ({{ 'Current' if is_sc else 'Voltage' }}, Power, FFT, Position, Force, IsMoving, Up/Down)</p>
+          <p><strong>Keithley conversion factors:</strong></p>
+          {% if keithley_conversion_factors_error %}
+            <p style="margin-top: 4px; color: #b45309;"><em>{{ keithley_conversion_factors_error }}</em></p>
+          {% elif keithley_conversion_factors %}
+            <table class="mini-table">
+              <thead>
+                <tr>
+                  <th>Channel</th>
+                  <th>Conversion factor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in keithley_conversion_factors %}
+                  <tr>
+                    <td>{{ item.channel }}</td>
+                    <td>{{ item.conversion_factor if item.conversion_factor is not none else 'None' }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <p style="margin-top: 4px;"><em>No DAQ channel conversion factors found.</em></p>
+          {% endif %}
         </div>
       </div>
 
