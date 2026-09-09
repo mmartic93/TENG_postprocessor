@@ -44,36 +44,6 @@ def register_routes(app):
     def is_short_circuit_rload(rload_id: str) -> bool:
         return str(rload_id or '').strip().upper() == 'SC'
 
-    def load_experiment_data(exp_path: str):
-        cached = EXPERIMENT_DATA_CACHE.get(exp_path)
-        if isinstance(cached, dict) and 'df' in cached:
-            return cached['df'], cached.get('cycle_markers', [])
-        if cached is not None:
-            return cached, []
-
-        Cycles_list = ExtractCycles(exp_path)
-        if len(Cycles_list) == 0:
-            return None, None
-
-        df_data_all = pd.concat(Cycles_list, ignore_index=True)
-        cycle_markers = []
-        offset = 0
-        for cycle_df in Cycles_list[:-1]:
-            offset += len(cycle_df)
-            if offset >= len(df_data_all):
-                break
-            if 'Time' in df_data_all.columns:
-                cycle_markers.append(float(df_data_all.iloc[offset]['Time']))
-            else:
-                cycle_markers.append(float(offset))
-
-        EXPERIMENT_DATA_CACHE[exp_path] = {
-            'df': df_data_all,
-            'cycle_markers': cycle_markers,
-            'cycles': Cycles_list,
-        }
-        return df_data_all, cycle_markers
-
     def load_experiment_cycles(exp_path: str):
         cached = EXPERIMENT_DATA_CACHE.get(exp_path)
         if isinstance(cached, dict) and 'cycles' in cached:
@@ -538,8 +508,6 @@ def register_routes(app):
         optimal_power_plot = None
         mean_vpp_plot = None
         oc_sc_comparison_plot = None
-        selected_oc_candidate = None
-        selected_sc_candidate = None
 
         try:
             if grouped_power_data:
@@ -586,7 +554,6 @@ def register_routes(app):
                     [{'name': selected_oc_candidate['name'], 'max_v': selected_oc_candidate['max_v']}],
                     [{'name': selected_sc_candidate['name'], 'vpp_i': selected_sc_candidate['vpp_i']}]
                 )
-
 
         except Exception as e:
             print(f"Error generating plots: {e}")
