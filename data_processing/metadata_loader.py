@@ -166,7 +166,7 @@ def get_experiment_folders(df: pd.DataFrame, raw_dir: str) -> List[dict]:
         date = str(row.get('Date', '') or '').strip()
         date = make_date_token(date)
 
-        exp_path = os.path.join(raw_dir, TribuId, f"{sample_neg}-{sample_pos}", f"{date}-{RloadId}")
+        exp_path = os.path.join(raw_dir, TribuId, f"{sample_pos}-{sample_neg}", f"{date}-{RloadId}")
         if not os.path.exists(exp_path):
             raise Exception("Error, the expected exp_path is not valid: %s", exp_path)
         else:

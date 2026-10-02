@@ -21,4 +21,4 @@ if __name__ == '__main__':
 
     # If you want to implement new things or patch bugs, set debugging to True.
     # The performance will be slower, but you will get more detailed error messages and automatic reloading of the server on code changes.
-    app.run(debug=False, host='127.0.0.1', port=5000)
+    app.run(debug=True, host='127.0.0.1', port=5000)
